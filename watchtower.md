@@ -9,10 +9,12 @@
 - Fee-bumping algorithm
 - Overall algorithm(s) for event based processing of all of the above
 - Set-up procedure for the WT by the stakeholder
-
+    
 ## Backbone
 
-The watchtower runs a full bitcoin node, and watchtowerd communicates with bitcoind through RPC/ZMQ to handle blockchain and wallet functionality. Watchtowerd handles communication with its stakeholder and with the coordinator. Watchtowerd will expose an interface that signals an event at each block connection. There will be various plugins that use these events as hooks, do some computation and state transitions, and respond to the watchtower. For example, a spend policy plugin that handles volume constraints maintains a database of unvault and spend transactions and their date-times and amounts. Upon a block connection event it will scan for new unvault transactions, compute whether the amount during the last time window (say, a week) plus the amount for the new unvault transactions would exceeded the policy limit. If it does not exceed the limit, the plugin responds with a "checks passed" message, otherwise, it responds with a "checks failed" message. This design is modular and extensible, and allows specific deployments to operate with as many or as little WT features as desired.    
+- Insert more formal description of watchtowerd and its interfaces (with bitcoind and plugins)
+<!--The watchtower runs a full bitcoin node, and watchtowerd communicates with bitcoind through RPC to handle blockchain and wallet functionality. Watchtowerd handles communication with its stakeholder and with the coordinator. Watchtowerd will expose an interface that signals an event at .... 
+There will be various plugins that use these events as hooks, do some computation and state transitions, and respond to the watchtower. For example, a spend policy plugin that handles volume constraints maintains a database of unvault and spend transactions and their date-times and amounts. Upon a block connection event it will scan for new unvault transactions, compute whether the amount during the last time window (say, a week) plus the amount for the new unvault transactions would exceeded the policy limit. If it does not exceed the limit, the plugin responds with a "checks passed" message, otherwise, it responds with a "checks failed" message. This design is modular and extensible, and allows specific deployments to operate with as many or as little WT features as desired. -->   
 
 ## Stakeholder interaction
 
@@ -23,7 +25,7 @@ Receive signature from stakeholder (Sig message)
 - Signature verification 
     - which of EmerTx, CancelTx, or Unvault-EmerTx -- if any -- is the signature for?
 - Signature storage 
-    - Postgres DB
+    - SQLite
     - What's the Schema?
     
 Respond with SigAck message
@@ -39,16 +41,15 @@ Respond with SigAck message
 
 ### Re-fill WT wallet
 
-Let's begin by specifying the wallet types which are used in a revault deployment. The co-owned bitcoin is controlled in the _main wallet_, a distributed wallet among stakeholders and managers. The stakeholders' WTs each have their own wallet, the _WT wallet_.  
-- This is a bit confusing... we don't really have good mental models for distributed wallets yet... is a wallet the software, the keys, or the complete access to coins? 
+Let's begin by specifying the onchain output descriptors which are used in a Revault deployment. The deposit descriptor, informally the "main wallet" which is "storing the co-owned coins". The fee-bumping descriptor, a single P2WPKH per watchtower which they can spend from in order to fee-bump revocation transactions. This descriptor is the one stakeholders need to pay to in order to "refill" their watchtower. The stakeholders' WTs each have their own wallet (software), the _WT wallet_, to unlock fee-bump outputs.
 
-In order to function properly, a WT wallet must have access to a _nice_ (discussed in [Fee-bump output set structure]) utxo pool. Feebump transactions create this pool, and themselves incur a small fee. 
+In order to function properly, a WT wallet must have access to a _nice_ (discussed in [Fee-bump output set structure]) utxo pool. Re-fill transactions create this pool, and themselves incur a small fee. 
 
 There are two approaches to the problem of how to maintain sufficient balance in each of the WT wallets, distinguished by the source of funding. The WT wallet can either be funded from the main wallet, or by an external source. Initially, both approaches seem valid, but the following discussion shows how this choice effects the protection of assets, stakeholders' trust assumptions, the incentives of participants, and the user experience.
 
 #### WT wallets funded from the main wallet
 
-As the stakeholders are responsible for the secure operation of their own WT, they should ensure that the WT wallet is sufficiently funded. This means they must initiate the re-fill process. The process involves determining the balance and UTxO set of the WT wallet (from inspecting the blockchain-- to avoid unnecessary communication with the WT), constructing the Feebump Tx(s) (which spends part of a deposit UTxO), adding their signature to the Tx(s), gathering consent and signatures from other stakeholders for the Feebump Tx(s) (which may require them each verifying the initiating stakeholder's WT's wallet state), and broadcasting the Feebump Tx. 
+As the stakeholders are responsible for the secure operation of their own WT, they should ensure that the WT wallet is sufficiently funded. This means they must initiate the re-fill process. The process involves determining the balance and UTxO set of the WT wallet (from inspecting the blockchain-- to avoid unnecessary communication with the WT), constructing the Refill Tx(s) (which spends part of a deposit UTxO), adding their signature to the Tx(s), gathering consent and signatures from other stakeholders for the Refill Tx(s) (which may require them each verifying the initiating stakeholder's WT's wallet state), and broadcasting the Refill Tx. 
 
 Note that most of the complexity of this process will be automated, and the user experience of this process will be something like:
 - Notifaction that WT balance is low
@@ -84,8 +85,13 @@ Should there be some verification by each stakeholder that the WT wallet is runn
 - Should the verification be carried out by stakeholders' laptops, or stakeholders' WTs? 
     - Stakeholders' laptops are less secure (are far easier to compromise), but this would then require no communication with the WT. 
     - If relying on the WTs to perform the verification, then it is more difficult to compromise, but it requires communication with the WT. In any case, if stakeholders' laptops are compromised, they may ACK a NACK from the WT and show the user that the verification passed, even if the WT were to sign their messages. 
+- Can have both:
+    - track watchtower's funds in the stakeholders's revaultd for the happy case (preventing new acknowledgements when funds are low)
+    - watchtower refusing to ACK if funds are too low (should only happen if the wallet bypassed the restriction imposed by the wallet daemon, ie if they are running a custom software for some shady purpose)
+- This is ok in the case where the fee market doesn't increase rapidly, causing the WT wallet to have insufficient funds without a change to the number of vaults being guarded. 
 
-What countermeasures can be used to ensure that Feebump Txs cannot be used to steel funds?
+
+What countermeasures can be used to ensure that Re-fill Txs cannot be used to steel funds?
 - Already depends on visual verification by ALL stakeholders
 - Can be automatically checked by all stakeholders' wallet software (e.g. type-checked and/or amount checked)
 - Can be automatically checked by all stakeholders' HW (e.g. type-checked and/or white-listed address checked)
@@ -94,39 +100,53 @@ What incentives are there for individual stakeholders with this setup?
 - Since WTs are funded from co-owned funds, a stakeholder can set up a strict spend policy, and essentially have the other stakeholders pay for the enforcement of that policy even if their spend policy would not have dissallowed a spend. 
 - Stakeholders are not incentivised to delay their WT's broadcast of Cancel Tx, since they are not paying for it out of their own pocket
 
+Counter arguments to re-filling WT wallets directly from the main wallet:
+- Funds on each WT wallet are negligible when compared with the funds at stake (e.g. a $100M in the vaults but only $1k in each WT wallet).
+- Introducing complexity for this so small divergence of incentives is likely to do more harm than good (more complex software => more bugs, more complex routine => less user friendly, more reliance on human verification => less human verification after some time)
+- This may not be feasible at all (low number of vaults)
+
+
 #### WT wallets funded from an external source
 
-To refill their WT wallets from an external source (e.g. buying BTC on an exchange), there should be a two transaction process. The withdrawal transaction from the exchange, and the Feebump Tx generating outputs for the WT wallet.
-Either the stakeholders should each have their own individual _feebumping wallet_ to craft Feebump Txs, or the WT should craft its own Feebump Txs. This is necessary as an intermediate step (e.g. between the exchange and the WT wallet) to ensure that Feebump Txs are constructed properly, with a well structured output set and with sufficient amounts. No guarantees can be made about the formatting of Txs from the external source, so this should not be relied upon. Also, the feebumping algorithm depends on _confirmed_ UTxOs, and so feebumping Txs are broadcast in advanced. 
+To refill their WT wallets from an external source (e.g. buying BTC on an exchange), there should be a two transaction process. The withdrawal transaction from the exchange (or from their personal wallet, or otherwise), and the Refill Tx generating outputs for the WT wallet.
+Either the stakeholders should each have their own individual _refill wallet_ to craft Refill Txs, or the WT should craft its own Refill Txs. This is necessary as an intermediate step (e.g. between the exchange and the WT wallet) to ensure that Refill Txs are constructed properly, with a well structured output set and with sufficient amounts. No guarantees can be made about the formatting of Txs from the external source, so this should not be relied upon. Also, the feebumping algorithm depends on _confirmed_ UTxOs, and so Refill Txs are broadcast in advanced. 
    
 The main user experience benefit of this approach is that there needn't be agreement among stakeholders to refill a watchtower. Stakeholders act independently to secure the operation of their own WT. Roughly, the UX is like this:
+    
+[Refill wallet operated by Stakeholder]
+- Notifaction that WT balance is low
+If re-fill wallet is low:
+    - Buy BTC on exchange or OTC
+    - Withdraw BTC to refill wallet
+- Click re-fill WT
+- Plug in HW, and visually verify that the HW displays a reasonable Tx (amount, descriptor)
+    if OK:
+    - Click sign on the HW
+    - Broadcast
+    else:
+    - stop? how to proceed? Laptop compromised
+
+[WT crafts its own refill Txs]
 - Notifaction that WT balance is low
 - Buy BTC on exchange or OTC
-- Withdraw BTC (to feebump wallet or WT wallet)
-    if feebump wallet:
-    - Click re-fill WT
-    - Plug in HW, and visually verify that the HW displays a reasonable Tx (amount, descriptor)
-        if OK:
-        - Click sign on the HW
-        - Broadcast
-        else:
-        - stop? how to proceed? Laptop compromised
-    else if WT wallet:
-    - Notification that WT balance is refilled
+- Withdraw BTC to WT wallet
+- Notification that WT balance is refilled
+        
+
     
-The feebump wallet approach has worse UX (more steps). 
-Directly filling the WT wallet is much simpler, as the Feebump Txs can be automated. 
+The case where the refill wallet is operated by the stakeholder has worse UX (more steps). 
+Directly filling the WT wallet is much simpler, as the Refill Txs can be automated. 
 
-In terms of the security of funds in transit, the feebump wallet approach relies on both the HW and the WT wallet not being compromised, whereas the WT wallet approach doesn't rely on the stakeholders HW being secure. 
+In terms of the security of funds in transit, the stakeholder-operated refill wallet approach relies on both the HW and the WT wallet not being compromised, whereas the WT wallet approach doesn't rely on the stakeholders HW being secure. 
 
-There is a risk that the stakeholder is unable to aquire BTC from an external source. They should have multiple options. If they fail to refill the wallet, they will eventually fail in enforcing their own spend policy.
+There is a risk that the stakeholder is unable to aquire BTC from an external source. They should have multiple options. If they fail to refill the WT wallet, they will eventually fail in enforcing their own spend policy. Moreover, the "WT wallet low" warning notification comes before a "WT wallet cannot accept more delegations" type of message. 
     
 From a whole system point of view, there is an incentive for stakeholders to be greedy with respect to WT fees. This could mean delaying the broadcast of Cancel Txs, to allow another stakeholder to incurr the cost. We expect the nominal amount of bitcoin to be reserved for WT wallets to be negligible compared to the amount at stake within the main wallet. Therefor this slight incentive to be greedy should not be a major concern. It can be alleviated by the company compensating stakeholders. 
     
 
 Concluding remarks:
 - The precident of stakeholders signing 'bypass-like' Txs does not exist if WT wallets are funded from an external source.
-- Coupling the security of the protocol with the availability of external sources of BTC might unwise, unless the stakeholders ensure they have multiple options
+- Coupling the security of the protocol with the availability of external sources of BTC might be unwise, unless the stakeholders ensure they have multiple options
 - The user experience of buying BTC from an external source intuitively seems better than requiring multi-party signing routine
 
   
@@ -134,9 +154,9 @@ Concluding remarks:
 
 ### API
 
-We need a policy API. Some policies may refer to explicit bitcoin policy descriptors, and others may refer to data external to the blockchain. 
+We need a policy API. Some policies may refer to explicit bitcoin policy descriptors, some to blockchain data (e.g. height) and others may refer to data external to the blockchain. The risk to successful enforcement of particular spend policy depends on the reliability of the required data source.
 - What external data oracles are necessary and reliable? 
-- Note that reliance on external data oracles has a larger attack surface than Bitcoin network & blockchain data
+- Note that reliance on external data oracles has a larger attack surface than Bitcoin network & blockchain data, given the extensive verifiability of blockchain data associated with proof-of-work.
 
 The stakeholders will specify spending policies that watchtowers enforce. These policies may contain arbitrary combinations of constraints: 
 - white-listed or black-listed xpubs, public keys, or addresses
@@ -146,7 +166,7 @@ The stakeholders will specify spending policies that watchtowers enforce. These 
 
 ### Enforcement
 
-Once specified in an appropriate set of API calls, the watchtower must be able to interpret the policy and enforce its constraints. Through monitoring blocks, its mempool, internal revault network events (Spend Tx advertisements and Stakeholder Sig messages), and any external channels with data oracles, the watchtower must determine whether a Spend Tx adheres to the policy or not. If the Spend Tx adheres to the policy, then the watchtower doesn't need to respond. Otherwise, it responds by broadcasting the associated Cancel Tx.
+Once specified in an appropriate set of API calls, the watchtower (watchtowerd + plugins) must be able to interpret the policy and enforce its constraints. Through monitoring blocks, its mempool, internal revault network events (Spend Tx advertisements and Stakeholder Sig messages), and any external channels with data oracles, the watchtower must determine whether a Spend Tx adheres to the policy or not. If the Spend Tx adheres to the policy, then the watchtower doesn't need to respond. Otherwise, it responds by broadcasting the associated Cancel Tx.
 
 ## Fee-bumping wallet reserves management
 
@@ -161,9 +181,9 @@ To achieve this, several algorithms are required to:
 
 [def 1] vault UTxO means either a deposit UTxO locked to the deposit descriptor or an unvault UTxO locked to the unvault descriptor
 
-Before discussing the details of these algorithms, let's consider their use at a higher level. Given an estimate of the fee-reserve per revocation transaction (which is dependent on the transaction type) we can compute the _total revocation reserve_. This is the total amount kept in reserve by a WT to perform its functions of cancelling transactions and enacting the emergency procedure. The total revocation reserve is a conservative amount that is beyond what is expected to be used. It is computed by the WT [how often? upon events and/or regular time intervals?] which notifies the stakeholder when a re-fill is necessary. In addition to maintaining sufficient total revocation reserve, the amount should be distributed appropriately across a number of fee-bump outputs with varying amounts. A 'well-structured' [what are the criteria?] fee-bump output set helps in bumping-fees with precision, without overspending. The WT will use a fee-estimation algorithm at the time of broadcast, an algorithm that takes into account the recent history of the fee-market state and estimates a conservative fee value to ensure that the transaction will be confirmed within X blocks. Here the bitcoin-core algorithm [perhaps with some modifiactions?] will be used. Given an estimate for the fee-bump amount, the coin-selection algorithm will select which fee-bump outputs to use [bitcoin core good enough here?]. Finally, if the initial estimation is insufficient (e.g. the transaction was not included by the target block), the transaction fee should be bumped. In the case of a C, the Tx must be mined before the U CSV. In the case of an E or UE, the Tx fee may be bumped by other WTs [Is that a secure mechanism?]. 
+Before discussing the details of these algorithms, let's consider their use at a higher level. Given an estimate of the fee-reserve per revocation transaction (which is dependent on the transaction type) we can compute the _total revocation reserve_. This is the total amount kept in reserve by a WT to perform its functions of cancelling transactions and enacting the emergency procedure. The total revocation reserve is a conservative amount that is beyond what is expected to be used. It is computed by the WT upon each block connection and by the stakeholders' wallet to notify the stakeholder when a re-fill is necessary. In addition to maintaining sufficient total revocation reserve, the amount should be distributed appropriately across a number of fee-bump outputs with varying amounts. A 'well-structured' fee-bump output set helps in bumping-fees with precision, without overspending. The WT will use a fee-estimation algorithm at the time of broadcast, an algorithm that takes into account the recent history of the fee-market state and estimates a conservative fee value to ensure that the transaction will be confirmed within X blocks. Here the bitcoin-core algorithm will be used. Given an estimate for the fee-bump amount, the coin-selection algorithm will select which fee-bump outputs to use [bitcoin core presumably not optimal here]. Finally, if the initial estimation is insufficient (e.g. the transaction was not included by the target block), the transaction fee should be bumped. In the case of a C, the Tx must be mined before the U CSV. In the case of an E or UE, the Tx fee may be bumped by other WTs [Explore feasibility of this mechanism]. 
 
-Note that while feebumping is expected for Cancel Txs (which may happen regularly), it is not relied upon nor expected for Emergency Txs. Requiring each WT to hold a fee-reserve for each Emergency Tx is extremely expensive when compared to preparing the emergency Tx with very high fees during the initial signing phase. This becomes more apparent as the system size scales up (more watchtowers) and the number of vault UTxOs increases. [what is the exact scaling relation?]
+Note that while feebumping is expected for Cancel Txs (which may happen regularly), it is not relied upon nor expected for Emergency Txs. Requiring each WT to hold a fee-reserve for each Emergency Tx is extremely expensive when compared to preparing the emergency Tx with very high fees during the initial signing phase. This becomes more apparent as the system size scales up (more watchtowers) and the number of vault UTxOs increases. The scaling relation is `total emergency fee-reserve ~ number of watchtowers * number of vault UTxOs`.
 
 ### Total Revocation Reserve
 
@@ -175,7 +195,7 @@ The elements v_i may refer to either deposit UTxOs or unvault UTxOs. Let the fee
 
 The rationale for maintaining a fee-reserve _PER VAULT_ is that otherwise, WTs could be abused by rogue managers triggering invalid spend attempts until the fee-reserves are drained, and then bypass the spend policy enforcement with a fraudulent Spend Tx. WTs must be able to respond to a mass broadcast of invalid spend attempts for each vault.  
 
-Note that r(v_i, t) is a function of the max weight of the Cancel Tx, w_C. w_C is fixed per deployment, based on the participant set, and it refers to the largest possible Cancel Tx weight that can be relayed, e.g. with the max number of feebump inputs, which is about 100kb [find better source]. It is also a function of the _feerate-reserve estimate_, f_C(t), which is determined from analysing the fee market with a given strategy. f_C(t) is frequently recomputed. For example, if we decide on a strategy that uses a 30 day moving average fee-rate (sats/WU), the fee-reserve per vault UTxO is given by
+Note that r(v_i, t) is a function of the max weight of the Cancel Tx, w_C. w_C is fixed per deployment, based on the participant set, and it refers to the largest possible Cancel Tx weight that can be relayed, e.g. with the max number of feebump inputs, which is about 100k WU. It is also a function of the _feerate-reserve estimate_, f_C(t), which is determined from analysing the fee market with a given strategy. f_C(t) is frequently recomputed. For example, if we decide on a strategy that uses a 30 day moving average fee-rate (sats/WU), the fee-reserve per vault UTxO is given by
 ```
     r(v_i, t) = f_C(t)*w_C = 30 moving average * w_C
 ```
@@ -421,6 +441,7 @@ Criteria
 - Coins should be distributed by the expected algorithm for fee-bumping.
     If simple linear feebumping is used, coins should be distributed as 
     (f*, (f_C-f*)/ CSV, (f_C-f*)/ CSV, (f_C-f*)/ CSV, (f_C-f*)/ CSV, (f_C-f*)/ CSV, ...)
+- Evolving with the fee market
     
 - The difficulty with the above is that we don't have f* at the time filling the fee wallet. Call our initial estimate f', and the estimate that we need at spend time f*. We aim for the difference, f'-f*, to be small. If f'-f* >> 0, we can always create more change. If f'-f* << 0, we can always add additional inputs. Thus we should have a buffer of additional smaller inputs (e.g. of the size (f_C-f*)/ CSV). 
 - Is it sufficient to generate f' with estimateSmartFee at the time of calculating R(t)? This could lead to a bunch of "warning, WT wallet low" notifications for the stakeholder in the beginning. Perhaps it's better to choose something like the median of the previous 30 days of feerates? 
@@ -444,6 +465,8 @@ It's important to note that a stakeholder who is not willing to trust other stak
 - The risk model for a stakeholder is weaker than the risk model for the custody operation as a whole. Both should be considered. 
 - Is a Feebump Tx output pool (where each output is locked to 1-of-N among the stakeholders) a tennable idea? The risk is that a compromised watchtower can lead to an empty feebump pool. Probably not acceptable.  
 - Should a WT broadcast a C if there is an extended halt after the Unvault Tx is confirmed, but no Spend Tx is broadcast?
+- How does a revault deployment's costs scale with more WTs?
+- How do multiple revault deployments scale given the blockspace limitation? 
 
 
 # WT system
@@ -452,4 +475,3 @@ Fee-bump algorithm to ensure that emergency Txs are processed ASAP.
     - A function for the system of WTs not, an individual WT.
     - Idea is to have watchtowers monitor for E or UE Txs and offer support for pushing it through the network by bumping the fee. 
     - This also raises the business question of, do we want to sell this as a support package?
-
