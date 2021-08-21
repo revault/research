@@ -1,8 +1,6 @@
 """ 
 TODO:
-* Use estimateSmartFee for Cancel tx & CF Tx
 * simulate requirement for cancel feebump, then implement feebump algo
-* Fix WT failing when number of active vaults > 0 ()
 * Optimise WTSM for multiple active vaults
 * Auto-generate report per simulation (running parameters, results, detailed data in tables)
 * Use integers for all values with units in satoshis
@@ -16,7 +14,6 @@ TODO:
 Plotting:
 * plot the amount wasted by overpaying fees due to inadequate availability of coins
 * plot O and FeeRate
-* No information from initialisation nor catastrophe is tracked yet
 """
 
 import hashlib
@@ -685,3 +682,19 @@ class WTSM():
         for coin in self.fbcoins:
             if coin['allocation'] == vaultID:
                 coin['allocation'] = None
+
+    def risk_status(self, block_height):
+        """Return a summary of the risk status for the set of vaults being watched.
+        """
+        # For cancel
+        under_requirement = []
+        for vault in self.vaults:
+            y = self.under_requirement(vault['fee_reserve'], block_height)
+            if y != 0:
+                under_requirement.append(y)
+        # For delegation
+        available = [coin for coin in self.fbcoins if coin['allocation']==None]
+        delegation_requires = sum(self.O(block_height)) - sum([coin['amount'] for coin in available])
+        if delegation_requires < 0:
+            delegation_requires = 0
+        return {"block": block_height, "num_vaults": len(self.vaults), "vaults_at_risk": len(under_requirement), "severity": sum(under_requirement), "delegation_requires": delegation_requires}        

@@ -8,10 +8,10 @@ class WTSim(object):
     """Simulator for fee-reserve management of a Revault Watchtower.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, fname):
         # Stakeholder parameters
         self.excess_delegations = 5
-        self.expected_active_vaults = 5
+        self.expected_active_vaults = 3
 
         # Manager parameters
         self.INVALID_SPEND_RATE = 0.1
@@ -20,6 +20,10 @@ class WTSim(object):
         # WT state machine
         self.wt = WTSM(config)
         self.vaults_df = read_csv("vaultIDs.csv")
+
+        # Simulation report
+        self.fname = fname
+        self.report_init = f"Watchtower config:\n{config}\nExcess delegations: {self.excess_delegations}\nExpected active vaults: {self.expected_active_vaults}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
 
     def required_reserve(self, block_height):
         required_reserve_per_vault = self.wt.fee_reserve_per_vault(
@@ -59,13 +63,15 @@ class WTSim(object):
 
     def plot_simulation(self, start_block, end_block, subplots):
 
+        plt.style.use(['plot_style.txt'])
+
         refill_fees = []
         refill_amounts = []
         cf_fees = []
         cancel_fees = []
         balances = []
         vault_count = 1
-        active_vaults = []
+        risk_status = []
         costs = []
         coin_pool_age = []
         pool_after_refill = []
@@ -76,6 +82,7 @@ class WTSim(object):
         vault_excess_after_cf = []
         vault_excess_after_delegation = []
         switch = "good"
+        report = self.report_init
 
 
         #Delegate several vaults initially
@@ -111,18 +118,20 @@ class WTSim(object):
                     refill_fees.append([block, refill_fee])
 
                     # snapshot coin pool after refill Tx
-                    amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                    pool_after_refill.append([block, amounts])
+                    if "coin_pool" in subplots:
+                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                        pool_after_refill.append([block, amounts])
 
-                    # snapshot vault excesses after CF Tx
-                    vault_requirement = self.wt.fee_reserve_per_vault(block)
-                    excesses = []
-                    for vault in self.wt.vaults:
-                        excess = sum(
-                            [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                        if excess > 0:
-                            excesses.append(excess)
-                    vault_excess_before_cf.append([block, excesses])
+                    # snapshot vault excesses before CF Tx
+                    if "vault_excesses" in subplots:
+                        vault_requirement = self.wt.fee_reserve_per_vault(block)
+                        excesses = []
+                        for vault in self.wt.vaults:
+                            excess = sum(
+                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                            if excess > 0:
+                                excesses.append(excess)
+                        vault_excess_before_cf.append([block, excesses])
 
                     # Wait for confirmation of refill, then CF Tx
                     cf_fee = self.wt.consolidate_fanout(block+1)
@@ -130,22 +139,24 @@ class WTSim(object):
                     cf_fees.append([block, cf_fee])
 
                     # snapshot coin pool after CF Tx confirmation
-                    amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                    pool_after_cf.append([block+7, amounts])
+                    if "coin_pool" in subplots:
+                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                        pool_after_cf.append([block+7, amounts])
 
                     # snapshot vault excesses after CF Tx
-                    excesses = []
-                    for vault in self.wt.vaults:
-                        excess = sum(
-                            [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                        if excess > 0:
-                            excesses.append(excess)
-                    vault_excess_after_cf.append([block, excesses])
+                    if "vault_excesses" in subplots:
+                        excesses = []
+                        for vault in self.wt.vaults:
+                            excess = sum(
+                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                            if excess > 0:
+                                excesses.append(excess)
+                        vault_excess_after_cf.append([block, excesses])
 
                     # Top up delegations after confirmation of CF Tx, because consolidating coins
                     # reduces the fee_reserve of a vault
                     try:
-                        self.wt.top_up_delegations(block+1)
+                        self.wt.top_up_delegations(block+7)
                     except(RuntimeError):
                         pass
 
@@ -172,14 +183,15 @@ class WTSim(object):
                     break
 
                 # snapshot vault excesses after delegation
-                vault_requirement = self.wt.fee_reserve_per_vault(block)
-                excesses = []
-                for vault in self.wt.vaults:
-                    excess = sum(
-                        [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                    if excess > 0:
-                        excesses.append(excess)
-                vault_excess_after_delegation.append([block, excesses])
+                if "vault_excesses" in subplots:
+                    vault_requirement = self.wt.fee_reserve_per_vault(block)
+                    excesses = []
+                    for vault in self.wt.vaults:
+                        excess = sum(
+                            [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                        if excess > 0:
+                            excesses.append(excess)
+                    vault_excess_after_delegation.append([block, excesses])
 
                 # Process spend attempt
                 print(f"processing spend at block {block}")
@@ -202,8 +214,9 @@ class WTSim(object):
                     self.wt.process_spend(vaultID)
 
                 # snapshot coin pool after spend attempt
-                amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                pool_after_spend.append([block, amounts])
+                if "coin_pool" in subplots:
+                    amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                    pool_after_spend.append([block, amounts])
 
             # Catastrophe
             if block % 144 == 1:
@@ -216,14 +229,51 @@ class WTSim(object):
                         cancel_fees.append([block, cancel_fees])
                         print(f"Canceled spend from vault {vault['id']}! fee = {cancel_fee}")
 
+                    # snapshot coin pool after all spend attempts are cancelled
+                    if "coin_pool" in subplots:
+                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                        pool_after_spend.append([block, amounts])
+
 
                     # Reboot operational flow with several vaults
                     refill_amount = self.R(block+10)
                     refill_amount = refill_amount*self.expected_active_vaults
                     print(f"refilling at block {block + 10} by {refill_amount} to fill reserve to {self.required_reserve(block+10)}")
                     self.wt.refill(refill_amount)
+
+                    # snapshot coin pool after refill Tx
+                    if "coin_pool" in subplots:
+                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                        pool_after_refill.append([block, amounts])
+
+                    # snapshot vault excesses before CF Tx
+                    if "vault_excesses" in subplots:
+                        vault_requirement = self.wt.fee_reserve_per_vault(block)
+                        excesses = []
+                        for vault in self.wt.vaults:
+                            excess = sum(
+                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                            if excess > 0:
+                                excesses.append(excess)
+                        vault_excess_before_cf.append([block, excesses])
+
                     cf_fee = self.wt.consolidate_fanout(block + 10)
                     print(f"consolidate-fanout Tx at block {block+10} with fee: {cf_fee}")
+
+                    # snapshot coin pool after CF Tx confirmation
+                    if "coin_pool" in subplots:
+                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                        pool_after_cf.append([block+7, amounts])
+
+                    # snapshot vault excesses after CF Tx
+                    if "vault_excesses" in subplots:
+                        excesses = []
+                        for vault in self.wt.vaults:
+                            excess = sum(
+                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                            if excess > 0:
+                                excesses.append(excess)
+                        vault_excess_after_cf.append([block, excesses])
 
                     for i in range(0,self.expected_active_vaults):
                         print(f"processing delegation at block {block + 10}")
@@ -233,20 +283,25 @@ class WTSim(object):
                         self.wt.process_delegation(vaultID, amount, block + 10)
 
 
-
-            balances.append([block, self.wt.balance(),
+            if "balance" in subplots:
+                balances.append([block, self.wt.balance(),
                              self.required_reserve(block)])
-            active_vaults.append([block, int(len(self.wt.vaults))])
-            costs.append([block, refill_fee, cf_fee, cancel_fee])
+            if "risk_status" in subplots:
+                status = self.wt.risk_status(block)
+                if (status['vaults_at_risk'] != 0) or (status['delegation_requires'] != 0):
+                    risk_status.append(status)
+            if "operations" in subplots or "cumulative_ops"in subplots:
+                costs.append([block, refill_fee, cf_fee, cancel_fee])
 
-            try:
-                processed = [
-                    coin for coin in self.wt.fbcoins if coin['processed'] != None]
-                ages = [block - coin['processed'] for coin in processed]
-                age = sum(ages)
-                coin_pool_age.append([block, age])
-            except:
-                pass  # If processed is empty, error raised
+            if "coin_pool_age" in subplots:
+                try:
+                    processed = [
+                        coin for coin in self.wt.fbcoins if coin['processed'] != None]
+                    ages = [block - coin['processed'] for coin in processed]
+                    age = sum(ages)
+                    coin_pool_age.append([block, age])
+                except:
+                    pass  # If processed is empty, error raised
 
             if "operations" in subplots:
                 # Check if wt becomes risky
@@ -295,7 +350,7 @@ class WTSim(object):
                                   color='b', ax=axes[plot_num], label="Cancel Fee")
             axes[plot_num].legend(loc='upper left')
             axes[plot_num].set_title("Operating Costs Breakdown")
-            axes[plot_num].set_ylabel("Fee Paid (Sats)", labelpad=15)
+            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
 
             # Highlight the plot with areas that show when the WT is at risk due to at least one
@@ -304,20 +359,20 @@ class WTSim(object):
                 axes[plot_num].axvspan(
                     risk_off, risk_on, color='red', alpha=0.25)
 
-            print(f"Analysis time span: {start_block} to {end_block}")
+            report += f"Analysis time span: {start_block} to {end_block}\n"
             risk_time = 0
             for (risk_on, risk_off) in wt_risk_time:
                 risk_time += (risk_off - risk_on)
-            print(f"Total time at risk: {risk_time} blocks")
+            report += f"Total time at risk: {risk_time} blocks\n"
 
             # What about avg recovery time?
             recovery_times = []
             for (risk_on, risk_off) in wt_risk_time:
                 recovery_times.append(risk_off - risk_on)
             if recovery_times != []:
-                print(f"Mean recovery time: {np.mean(recovery_times)} blocks")
-                print(f"Median recovery time: {np.median(recovery_times)} blocks")
-                print(f"Max recovery time: {max(recovery_times)} blocks")
+                report += f"Mean recovery time: {np.mean(recovery_times)} blocks\n"
+                report += f"Median recovery time: {np.median(recovery_times)} blocks\n"
+                report += f"Max recovery time: {max(recovery_times)} blocks\n"
 
             plot_num += 1
 
@@ -330,7 +385,7 @@ class WTSim(object):
                                           'Refill Fee': 'r', 'CF Fee': 'g', 'Cancel Fee': 'b'})
             axes[plot_num].legend(loc='upper left')
             axes[plot_num].set_title("Cumulative Operating Costs")
-            axes[plot_num].set_ylabel("Fee Paid (Sats)", labelpad=15)
+            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
@@ -357,7 +412,7 @@ class WTSim(object):
             labels = set(labels)
             axes[plot_num].legend(handles, labels, loc='upper right')
             axes[plot_num].set_title("Feebump Coin Pool")
-            axes[plot_num].set_ylabel("Coin Amount (Sats)", labelpad=15)
+            axes[plot_num].set_ylabel("Coin Amount (Satoshis)", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
@@ -379,19 +434,24 @@ class WTSim(object):
                 excesses_df = DataFrame(tuples, columns=['block', 'amount'])
                 excesses_df.plot.scatter(
                     x='block', y='amount', color='b', ax=axes[plot_num])
-            axes[plot_num].set_ylabel("Vault Excess (Sats)", labelpad=15)
+            axes[plot_num].set_ylabel("Vault Excess (Satoshis)", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
         # Plot WT number of active vaults
-        if "active_vaults" in subplots:
-            active_vaults_df = DataFrame(active_vaults, columns=[
-                                         'block', 'active vaults'])
-            active_vaults_df.set_index(['block'], inplace=True)
-            active_vaults_df.plot(ax=axes[plot_num])
-            axes[plot_num].set_ylabel("Number of active vaults", labelpad=15)
-            axes[plot_num].set_xlabel("Block", labelpad=15)
-            plot_num += 1
+        if "risk_status" in subplots:
+            if risk_status != []:
+                risk_status_df = DataFrame(risk_status)
+                risk_status_df.set_index(['block'], inplace=True)
+                risk_status_df['num_vaults'].plot(ax=axes[plot_num], label="number of vaults", color='r', legend=True)
+                risk_status_df['vaults_at_risk'].plot(ax=axes[plot_num], label="vaults at risk", color='b', legend=True)
+                ax2 = axes[plot_num].twinx()
+                risk_status_df['delegation_requires'].plot(ax=ax2,  label="new delegation requires", color='g', legend=True)
+                risk_status_df['severity'].plot(ax=ax2,  label="total severity of risk", color='k', legend=True)
+                axes[plot_num].set_ylabel("Vaults", labelpad=15)
+                axes[plot_num].set_xlabel("Block", labelpad=15)
+                ax2.set_ylabel("Satoshis", labelpad=15)
+                plot_num += 1
 
         # Plot coin pool age
         if "coin_pool_age" in subplots:
@@ -400,9 +460,14 @@ class WTSim(object):
                                 ax=axes[plot_num], label="Total coin pool age")
             plot_num += 1
 
-        plt.show()
+        with open(f"Results/{self.fname}.txt",'w+',encoding = 'utf-8') as f:
+            f.write(report)
+        plt.savefig(f"Results/{self.fname}.png")
+        # plt.show()
 
     def plot_strategic_values(self, start_block, end_block, estimate_strat, reserve_strat):
+        plt.style.use(['plot_style.txt'])
+
         figure, axes = plt.subplots(3, 1)
         self.wt.estimate_strat = estimate_strat
         self.wt.reserve_strat = reserve_strat
@@ -454,16 +519,16 @@ if __name__ == '__main__':
         "O_version": 0, "I_version": 1, "feerate_src": "tx_fee_history.csv", "weights_src": "tx_weights.csv",
         "block_datetime_src": "block_height_datetime.csv"
     }
-    # FEE_ESTIMATES = "fee_estimates_fine.csv" # FIME: not integrated 
+    # FEE_ESTIMATES = "fee_estimates_fine.csv" # FIXME: not integrated 
     BLOCK_DATETIMES = "block_height_datetime.csv"
+    fname = "TestReport"
 
-    sim = WTSim(config)
+    sim = WTSim(config, fname)
 
-    start_block = FIRST_BLOCK_IN_DATA
+    start_block = FIRST_BLOCK_IN_DATA 
     end_block = 681000
-    # end_block = 681000
 
-    # "vault_excesses", "coin_pool_age", "coin_pool", "active_vaults"]
+    # "vault_excesses", "coin_pool_age", "coin_pool", "risk_status"]
     subplots = ["balance", "operations", "cumulative_ops"]
     sim.plot_simulation(start_block, end_block, subplots)
 
