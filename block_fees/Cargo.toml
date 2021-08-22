@@ -10,3 +10,5 @@ blocks_iterator = "0.2.0"
 
 # Needed for blocks_iterator's Config::from_args(). Already one of its deps.
 structopt = "0.3.21"
+
+bitcoin = "0.26.0"
