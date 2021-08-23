@@ -10,11 +10,11 @@ class WTSim(object):
 
     def __init__(self, config, fname):
         # Stakeholder parameters
-        self.excess_delegations = 5
+        self.excess_delegations = 7
         self.expected_active_vaults = 3
 
         # Manager parameters
-        self.INVALID_SPEND_RATE = 0.1
+        self.INVALID_SPEND_RATE = 0.05
         self.CATASTROPHE_RATE = 0.005 
 
         # WT state machine
@@ -516,11 +516,10 @@ class WTSim(object):
 if __name__ == '__main__':
     config = {
         "n_stk": 7, "n_man": 3, "reserve_strat": "CUMMAX95Q90", "estimate_strat": "ME30",
-        "O_version": 0, "I_version": 1, "feerate_src": "tx_fee_history.csv", "weights_src": "tx_weights.csv",
+        "O_version": 0, "I_version": 1, "feerate_src": "tx_fee_history.csv", 
+        "estimate_smart_feerate_src": "fee_estimates_fine.csv", "weights_src": "tx_weights.csv",
         "block_datetime_src": "block_height_datetime.csv"
     }
-    # FEE_ESTIMATES = "fee_estimates_fine.csv" # FIXME: not integrated 
-    BLOCK_DATETIMES = "block_height_datetime.csv"
     fname = "TestReport"
 
     sim = WTSim(config, fname)

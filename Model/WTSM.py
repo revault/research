@@ -38,6 +38,8 @@ class WTSM():
 
         self.feerate_df = read_csv(
             config['feerate_src'], parse_dates=True, index_col="DateTime")
+        self.estimate_smart_feerate_df = read_csv(
+            config['estimate_smart_feerate_src'], parse_dates=True, index_col="DateTime")
 
         self.weights_df = read_csv(config['weights_src'], sep=";")
         # Set (n_stk, n_man) as multiindex for weights dataframe that gives transaction size in WUs
@@ -74,6 +76,20 @@ class WTSM():
         #     if coin in vault['fee_reserve']:
         #         vault['fee_reserve'].remove(coin)
         #         break # Coin is unique, stop looping once found and removed
+
+    def _estimate_smart_feerate(self, block_height):
+        # Simulator provides current block_height. Data source for estimateSmartFee indexed by datetime.
+        # Convert block_height to datetime and find the previous (using 'ffill') datum for associated
+        # block_height.
+        target = "block1-2"
+        datetime = self._get_block_datetime(block_height)
+        loc = self.estimate_smart_feerate_df.index.get_loc(key=datetime, method="ffill", tolerance="0000-00-00 04:00:00")
+        # If data isnan or less than or equal to 0, return value error
+        estimate = self.estimate_smart_feerate_df[f"{target}"][loc]
+        if np.isnan(estimate) or (estimate <= 0):
+            raise(ValueError(f"No estimate smart feerate data at block {block_height}"))
+        else:
+            return estimate
 
     def _feerate_reserve_per_vault(self, block_height):
         """Return feerate reserve per vault (satoshi/vbyte). The value is determined from a
@@ -371,7 +387,11 @@ class WTSM():
                 num_outputs += 1
 
         # Compute fee for CF Tx
-        feerate = self._feerate(block_height)
+        try:
+            feerate = self._estimate_smart_feerate(block_height)
+        except(ValueError, KeyError):
+            feerate = self._feerate(block_height)
+
         P2WPKH_INPUT_vBytes = 67.75
         P2WPKH_OUTPUT_vBytes = 31
         cf_tx_fee = (10.75 + num_outputs*P2WPKH_OUTPUT_vBytes +
@@ -610,7 +630,10 @@ class WTSM():
         if vault == None:
             raise RuntimeError(f"No vault found with id {vaultID}")
 
-        init_fee = self._feerate(block_height)
+        try:
+            init_fee = self._estimate_smart_feerate(block_height)
+        except(ValueError, KeyError):
+            init_fee = self._feerate(block_height)
 
         cancel_fb_inputs = []
 

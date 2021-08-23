@@ -24,7 +24,7 @@ legend.borderpad: 0.2
 legend.columnspacing: 1.5
 legend.labelspacing:  0.4
 text.usetex: False
-axes.titlelocation: centre
+axes.titlelocation: center
 axes.formatter.use_mathtext: True
 #axes.formatter.useoffset: False
 axes.formatter.limits: -5, 5
