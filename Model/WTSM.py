@@ -37,7 +37,7 @@ class WTSM():
         self.fbcoin_count = 0
 
         self.feerate_df = read_csv(
-            config['feerate_src'], parse_dates=True, index_col="DateTime")
+            config['feerate_src'], index_col="Block")
         self.estimate_smart_feerate_df = read_csv(
             config['estimate_smart_feerate_src'], parse_dates=True, index_col="DateTime")
 
@@ -96,51 +96,44 @@ class WTSM():
            statistical analysis of historical feerates, using one of the implemented strategies
            chosen with the self.reserve_strat parameter. 
         """
+        thirtyD = 144*30 # 30 days in blocks
+        ninetyD = 144*90 # 90 days in blocks
         if self.reserve_strat not in self.feerate_df:
             if self.reserve_strat == '95Q30':
-                self.feerate_df['95Q30'] = self.feerate_df['FeeRate'].rolling('30D').quantile(
+                self.feerate_df['95Q30'] = self.feerate_df['MeanFeerate'].rolling(thirtyD, min_periods=144).quantile(
                     quantile=0.95, interpolation='linear')
 
             elif self.reserve_strat == '95Q90':
-                self.feerate_df['95Q90'] = self.feerate_df['FeeRate'].rolling('90D').quantile(
+                self.feerate_df['95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
                     quantile=0.95, interpolation='linear')
 
             elif self.reserve_strat == 'CUMMAX95Q90':
-                self.feerate_df['CUMMAX95Q90'] = self.feerate_df['FeeRate'].rolling('90D').quantile(
+                self.feerate_df['CUMMAX95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
                     quantile=0.95, interpolation='linear').cummax()
 
             else:
                 raise ValueError("Strategy not implemented")
 
-        # Simulator provides current block_height. Data source for feerate indexed by datetime.
-        # Convert block_height to datetime and find the previous (using 'ffill') datum for associated
-        # block_height.
-        datetime = self._get_block_datetime(block_height)
-        loc = self.feerate_df.index.get_loc(key=datetime, method="ffill")
-        return self.feerate_df[self.reserve_strat][loc]
+        return self.feerate_df[self.reserve_strat][block_height]
 
     def _feerate(self, block_height):
         """Return a current feerate estimate (satoshi/vbyte). The value is determined from a
            statistical analysis of historical feerates, using one of the implemented strategies
            chosen with the self.estimate_strat parameter. 
         """
+        thirtyD = 144*30 # 30 days in blocks
         if self.estimate_strat not in self.feerate_df:
             if self.estimate_strat == 'MA30':
-                self.feerate_df['MA30'] = self.feerate_df['FeeRate'].rolling(
-                    '30D').mean()
+                self.feerate_df['MA30'] = self.feerate_df['MeanFeerate'].rolling(
+                    thirtyD, min_periods=144).mean()
 
             elif self.estimate_strat == 'ME30':
-                self.feerate_df['ME30'] = self.feerate_df['FeeRate'].rolling(
-                    '30D').median()
+                self.feerate_df['ME30'] = self.feerate_df['MeanFeerate'].rolling(
+                    thirtyD, min_periods=144).median()
             else:
                 raise ValueError("Strategy not implemented")
 
-        # Simulator provides current block_height. Data source for feerate indexed by datetime.
-        # Convert block_height to datetime and find the previous (using 'ffill') datum for associated
-        # block_height.
-        datetime = self._get_block_datetime(block_height)
-        loc = self.feerate_df.index.get_loc(key=datetime, method="ffill")
-        return self.feerate_df[self.estimate_strat][loc]
+        return self.feerate_df[self.estimate_strat][block_height]
 
     def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
         """Convert feerate (satoshi/vByte) into transaction fee (satoshi).

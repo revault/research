@@ -1,9 +1,5 @@
 from WTSM import *
 
-# Timestamp from my node 2016-05-18 02:01:08, data starts at 2016-05-18 02:00:00
-FIRST_BLOCK_IN_DATA = 415909
-MAX_TX_SIZE = 100000  # vBytes
-
 class WTSim(object):
     """Simulator for fee-reserve management of a Revault Watchtower.
     """
@@ -47,7 +43,10 @@ class WTSim(object):
         new_reserves = R//(sum(self.wt.O(block_height)))
 
         # Expected CF Tx fee
-        feerate = self.wt._feerate(block_height)  # FIXME estimateSmartFee
+        try: 
+            feerate = self.wt._estimate_smart_feerate(block_height)
+        except(ValueError, KeyError):
+            feerate = self.wt._feerate(block_height)
         P2WPKH_INPUT_vBytes = 67.75
         P2WPKH_OUTPUT_vBytes = 31
         expected_num_outputs = len(self.wt.O(block_height))*new_reserves
@@ -514,9 +513,10 @@ class WTSim(object):
 
 
 if __name__ == '__main__':
+    # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
     config = {
         "n_stk": 7, "n_man": 3, "reserve_strat": "CUMMAX95Q90", "estimate_strat": "ME30",
-        "O_version": 0, "I_version": 1, "feerate_src": "tx_fee_history.csv", 
+        "O_version": 0, "I_version": 1, "feerate_src": "../block_fees/historical_fees.csv", 
         "estimate_smart_feerate_src": "fee_estimates_fine.csv", "weights_src": "tx_weights.csv",
         "block_datetime_src": "block_height_datetime.csv"
     }
@@ -524,7 +524,7 @@ if __name__ == '__main__':
 
     sim = WTSim(config, fname)
 
-    start_block = FIRST_BLOCK_IN_DATA 
+    start_block = 100000 
     end_block = 681000
 
     # "vault_excesses", "coin_pool_age", "coin_pool", "risk_status"]
