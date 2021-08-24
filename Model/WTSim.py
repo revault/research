@@ -1,16 +1,21 @@
 from WTSM import *
 
+class DelegationError(Exception):
+    pass
+class SpendAttemptError(Exception):
+    pass
+
 class WTSim(object):
     """Simulator for fee-reserve management of a Revault Watchtower.
     """
 
     def __init__(self, config, fname):
         # Stakeholder parameters
-        self.excess_delegations = 7
-        self.expected_active_vaults = 3
+        self.excess_delegations = 3
+        self.expected_active_vaults = 5
 
         # Manager parameters
-        self.INVALID_SPEND_RATE = 0.05
+        self.INVALID_SPEND_RATE = 0.1
         self.CATASTROPHE_RATE = 0.005 
 
         # WT state machine
@@ -35,8 +40,8 @@ class WTSim(object):
                  doesn't know which coins are allocated or not. 
         """
         bal = self.wt.balance()
-        required_reserve = self.required_reserve(block_height)
-        R = required_reserve - bal
+        reserve_total = sum(self.wt.O(block_height))*(len(self.wt.vaults)+self.excess_delegations)
+        R = reserve_total - bal
         if R <= 0:
             return 0
 
@@ -51,235 +56,289 @@ class WTSim(object):
         P2WPKH_OUTPUT_vBytes = 31
         expected_num_outputs = len(self.wt.O(block_height))*new_reserves
         expected_num_inputs = len(self.wt.O(block_height))*len(self.wt.vaults)  # guess...
-        expected_cf__fee = (10.75 + expected_num_outputs*P2WPKH_OUTPUT_vBytes +
+        expected_cf_fee = (10.75 + expected_num_outputs*P2WPKH_OUTPUT_vBytes +
                             expected_num_inputs*P2WPKH_INPUT_vBytes)*feerate
 
-        print(f"    Expected CF Tx fee: {expected_cf__fee}")
+        print(f"    Expected CF Tx fee: {expected_cf_fee}")
         print(f"    Expected num outputs: {expected_num_outputs}")
 
-        R += expected_cf__fee
+        R += expected_cf_fee
         return R
+
+    def initialize_sequence(self, block_height):
+        ## Refill transition
+        # WT provided with enough to allocate up to the expected number of active vaults
+        initial_reserve_buffer_factor = 2
+        reserve_total =  sum(self.wt.O(block_height))*self.expected_active_vaults*initial_reserve_buffer_factor
+
+        # Expected CF Tx fee
+        try: 
+            feerate = self.wt._estimate_smart_feerate(block_height)
+        except(ValueError, KeyError):
+            feerate = self.wt._feerate(block_height)
+        P2WPKH_INPUT_vBytes = 67.75
+        P2WPKH_OUTPUT_vBytes = 31
+        expected_num_outputs = len(self.wt.O(block_height))*self.expected_active_vaults
+        expected_num_inputs = 1
+        expected_cf_fee = (10.75 + expected_num_outputs*P2WPKH_OUTPUT_vBytes +
+                            expected_num_inputs*P2WPKH_INPUT_vBytes)*feerate
+
+        refill_amount = reserve_total + expected_cf_fee - self.wt.balance()
+        self.wt.refill(refill_amount)
+        print(f"inatialising WT with refill at block {block_height} by {refill_amount}")
+
+        # Track operational costs
+        try:
+            self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
+        except(ValueError, KeyError):
+            self.refill_fee = 109.5 * self.wt._feerate(block_height)
+
+        # snapshot coin pool after refill Tx
+        if "coin_pool" in self.subplots:
+            amounts = [coin['amount'] for coin in self.wt.fbcoins]
+            self.pool_after_refill.append([block_height, amounts])
+
+        # snapshot vault excesses before CF Tx
+        if "vault_excesses" in self.subplots:
+            vault_requirement = self.wt.fee_reserve_per_vault(block_height)
+            excesses = []
+            for vault in self.wt.vaults:
+                excess = sum(
+                    [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                if excess > 0:
+                    excesses.append(excess)
+            self.vault_excess_before_cf.append([block_height, excesses])
+
+        ## Consolidate-fanout transition
+        self.cf_fee = self.wt.consolidate_fanout(block_height)
+        print(f"consolidate-fanout Tx at block {block_height} with fee: {self.cf_fee}")
+
+        # snapshot coin pool after CF Tx
+        if "coin_pool" in self.subplots:
+            amounts = [coin['amount'] for coin in self.wt.fbcoins]
+            self.pool_after_cf.append([block_height, amounts])
+
+        ## Allocation transitions
+        for i in range(0,self.expected_active_vaults):
+            print(f"processing delegation at block {block_height}")
+            vaultID = self.vaults_df['vaultID'][self.vault_count]
+            self.vault_count += 1
+            amount = 10e10 # 100 BTC
+            self.wt.process_delegation(vaultID, amount, block_height)
+
+        # snapshot vault excesses after delegations
+        if "vault_excesses" in self.subplots:
+            vault_requirement = self.wt.fee_reserve_per_vault(block_height)
+            excesses = []
+            for vault in self.wt.vaults:
+                excess = sum(
+                    [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                if excess > 0:
+                    excesses.append(excess)
+            self.vault_excess_after_delegation.append([block_height, excesses])
+
+
+    def refill_sequence(self, block_height):
+        refill_amount = self.R(block_height)
+        if refill_amount > 0:
+            ## Refill transition
+            print(f"refilling at block {block_height} by {refill_amount} to fill reserve")
+            self.wt.refill(refill_amount)
+            try:
+                self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
+            except(ValueError, KeyError):
+                self.refill_fee = 109.5 * self.wt._feerate(block_height)
+
+            # snapshot coin pool after refill Tx
+            if "coin_pool" in self.subplots:
+                amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                self.pool_after_refill.append([block_height, amounts])
+
+            # snapshot vault excesses before CF Tx
+            if "vault_excesses" in self.subplots:
+                vault_requirement = self.wt.fee_reserve_per_vault(block_height)
+                excesses = []
+                for vault in self.wt.vaults:
+                    excess = sum(
+                        [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                    if excess > 0:
+                        excesses.append(excess)
+                self.vault_excess_before_cf.append([block_height, excesses])
+
+            ## Consolidate-fanout transition
+            # Wait for confirmation of refill, then CF Tx
+            self.cf_fee = self.wt.consolidate_fanout(block_height+1)
+            print(f"consolidate-fanout Tx at block {block_height+1} with fee: {self.cf_fee}")
+
+            # snapshot coin pool after CF Tx confirmation
+            if "coin_pool" in self.subplots:
+                amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                self.pool_after_cf.append([block_height+7, amounts])
+
+            # snapshot vault excesses after CF Tx
+            if "vault_excesses" in self.subplots:
+                excesses = []
+                for vault in self.wt.vaults:
+                    excess = sum(
+                        [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                    if excess > 0:
+                        excesses.append(excess)
+                self.vault_excess_after_cf.append([block_height, excesses])
+
+            ## Top up transition
+            # Top up delegations after confirmation of CF Tx, because consolidating coins
+            # reduces the fee_reserve of a vault
+            try:
+                self.wt.top_up_delegations(block_height+7)
+            except(RuntimeError):
+                pass
+
+    def _spend_init(self,block_height):
+        ## Top up transition
+        # Top up delegations before processing a delegation, because time has passed, and we mustn't accept
+        # delegation if the available coin pool is insufficient.
+        try:
+            self.wt.top_up_delegations(block_height)
+        except(RuntimeError):
+            pass
+
+        # Delegate a vault
+        print(f"processing delegation at block {block_height}")
+        vaultID = self.vaults_df['vaultID'][self.vault_count]
+        self.vault_count += 1
+        amount = 10e10  # 100 BTC
+
+        ## Allocation transition
+        # If WT fails to acknowledge delegation, exit the simulation and plot the outcome so-far
+        try:
+            self.wt.process_delegation(vaultID, amount, block_height)
+        except(RuntimeError):
+            raise(DelegationError())
+
+        # snapshot vault excesses after delegation
+        if "vault_excesses" in self.subplots:
+            vault_requirement = self.wt.fee_reserve_per_vault(block_height)
+            excesses = []
+            for vault in self.wt.vaults:
+                excess = sum(
+                    [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                if excess > 0:
+                    excesses.append(excess)
+            self.vault_excess_after_delegation.append([block_height, excesses])
+
+
+        # choose a random vault to spend
+        try:
+            vaultID = choice(self.wt.vaults)['id']
+        except IndexError:
+            raise SpendAttemptError(
+                "Attempted spend without existing delegations")
+
+        return vaultID
+
+    def spend_sequence(self, block_height):
+        vaultID = self._spend_init(block_height)
+        ## Spend transition
+        print(f"processing spend at block {block_height}")
+        self.wt.process_spend(vaultID)
+
+        # snapshot coin pool after spend attempt
+        if "coin_pool" in self.subplots:
+            amounts = [coin['amount'] for coin in self.wt.fbcoins]
+            self.pool_after_spend.append([block_height, amounts])
+
+    def cancel_sequence(self, block_height):
+        vaultID = self._spend_init(block_height)
+        ## Cancel transition
+        print(f"processing cancel at block {block_height}")
+        cancel_inputs = self.wt.process_cancel(vaultID, block_height)
+        self.wt.finalize_cancel(vaultID)
+        self.cancel_fee = sum(coin['amount'] for coin in cancel_inputs)
+        print(f"Cancel! fee = {self.cancel_fee}")
+
+        # snapshot coin pool after cancel
+        if "coin_pool" in self.subplots:
+            amounts = [coin['amount'] for coin in self.wt.fbcoins]
+            self.pool_after_cancel.append([block_height, amounts])
+
+    def catastrophe_sequence(self, block_height):
+        print(f"Catastrophic breach detected at block {block_height}")
+        for vault in self.wt.vaults:
+            ## Cancel transition
+            cancel_inputs = self.wt.process_cancel(vault['id'], block_height)
+            self.wt.finalize_cancel(vault['id'])
+            # If a cancel fee has already been paid this block, sum those fees
+            # so that when plotting costs this will appear as one total operation
+            # rather than several separate cancel operations
+            try:
+                cancel_fee = sum(coin['amount'] for coin in cancel_inputs)
+                self.cancel_fee += cancel_fee
+            except(TypeError):
+                cancel_fee = sum(coin['amount'] for coin in cancel_inputs)
+                self.cancel_fee = cancel_fee
+            print(f"Canceled spend from vault {vault['id']}! fee = {cancel_fee}")
+
+        # snapshot coin pool after all spend attempts are cancelled
+        if "coin_pool" in self.subplots:
+            amounts = [coin['amount'] for coin in self.wt.fbcoins]
+            self.pool_after_catastrophe.append([block_height, amounts])
 
     def plot_simulation(self, start_block, end_block, subplots):
 
-        plt.style.use(['plot_style.txt'])
+        plt.style.use(['plot_style.txt'])              
 
-        refill_fees = []
-        refill_amounts = []
-        cf_fees = []
-        cancel_fees = []
+        self.refill_fee = None
+        self.cf_fee = None
+        self.cancel_fee = None
+        self.vault_count = 1
+        
+        self.subplots = subplots
+        self.pool_after_refill = []
+        self.pool_after_cf = []
+        self.pool_after_spend = []
+        self.pool_after_cancel = []
+        self.pool_after_catastrophe = []
+        self.vault_excess_before_cf = []
+        self.vault_excess_after_cf = []
+        self.vault_excess_after_delegation = []
         balances = []
-        vault_count = 1
         risk_status = []
         costs = []
         coin_pool_age = []
-        pool_after_refill = []
-        pool_after_cf = []
-        pool_after_spend = []
         wt_risk_time = []
-        vault_excess_before_cf = []
-        vault_excess_after_cf = []
-        vault_excess_after_delegation = []
+        
         switch = "good"
         report = self.report_init
 
-
-        #Delegate several vaults initially
-        refill_amount = self.R(start_block)
-        refill_amount = refill_amount*self.expected_active_vaults
-        self.wt.refill(refill_amount)
-        self.wt.consolidate_fanout(start_block)
-
-        for i in range(0,self.expected_active_vaults):
-            print(f"processing delegation at block {start_block}")
-            vaultID = self.vaults_df['vaultID'][vault_count]
-            vault_count += 1
-            amount = 10e10 # 100 BTC
-            self.wt.process_delegation(vaultID, amount, start_block)
-
+        self.initialize_sequence(start_block)
 
         for block in range(start_block, end_block):
-            refill_amount = 0
-            refill_fee = None
-            cf_fee = None
-            cancel_fee = None
-
-            # Refill if the balance is low
             # if block % 144 == 0: # once per day
             if block % 1 == 0: # each block
-                refill_amount = self.R(block)
-                if refill_amount > 0:
-                    print(f"refilling at block {block} by {refill_amount} to fill reserve to {self.required_reserve(block)}")
-                    self.wt.refill(refill_amount)
-                    refill_amounts.append([block, refill_amount])
-                    # use estimate smart fee
-                    refill_fee = 109.5 * self.wt._feerate(block)
-                    refill_fees.append([block, refill_fee])
+                self.refill_sequence(block)
 
-                    # snapshot coin pool after refill Tx
-                    if "coin_pool" in subplots:
-                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                        pool_after_refill.append([block, amounts])
-
-                    # snapshot vault excesses before CF Tx
-                    if "vault_excesses" in subplots:
-                        vault_requirement = self.wt.fee_reserve_per_vault(block)
-                        excesses = []
-                        for vault in self.wt.vaults:
-                            excess = sum(
-                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                            if excess > 0:
-                                excesses.append(excess)
-                        vault_excess_before_cf.append([block, excesses])
-
-                    # Wait for confirmation of refill, then CF Tx
-                    cf_fee = self.wt.consolidate_fanout(block+1)
-                    print(f"consolidate-fanout Tx at block {block+1} with fee: {cf_fee}")
-                    cf_fees.append([block, cf_fee])
-
-                    # snapshot coin pool after CF Tx confirmation
-                    if "coin_pool" in subplots:
-                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                        pool_after_cf.append([block+7, amounts])
-
-                    # snapshot vault excesses after CF Tx
-                    if "vault_excesses" in subplots:
-                        excesses = []
-                        for vault in self.wt.vaults:
-                            excess = sum(
-                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                            if excess > 0:
-                                excesses.append(excess)
-                        vault_excess_after_cf.append([block, excesses])
-
-                    # Top up delegations after confirmation of CF Tx, because consolidating coins
-                    # reduces the fee_reserve of a vault
-                    try:
-                        self.wt.top_up_delegations(block+7)
-                    except(RuntimeError):
-                        pass
-
-            # Once per day, after balance maintenance, process delegation for a spend
-            if block % 144 == 0:
-                # Top up delegations before processing a delegation, because time has passed, and we mustn't accept
-                # delegation if the available coin pool is insufficient.
-                try:
-                    self.wt.top_up_delegations(block)
-                except(RuntimeError):
-                    pass
-
-                # Delegate a vault
-                print(f"processing delegation at block {block}")
-                vaultID = self.vaults_df['vaultID'][vault_count]
-                vault_count += 1
-                amount = 10e10  # 100 BTC
-
-                # If WT fails to acknowledge delegation, exit the simulation and plot the outcome so-far
-                try:
-                    self.wt.process_delegation(vaultID, amount, block)
-                except(RuntimeError):
-                    print("Process Delegation FAILED.")
-                    break
-
-                # snapshot vault excesses after delegation
-                if "vault_excesses" in subplots:
-                    vault_requirement = self.wt.fee_reserve_per_vault(block)
-                    excesses = []
-                    for vault in self.wt.vaults:
-                        excess = sum(
-                            [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                        if excess > 0:
-                            excesses.append(excess)
-                    vault_excess_after_delegation.append([block, excesses])
-
-                # Process spend attempt
-                print(f"processing spend at block {block}")
-                # choose a random vault to spend
-                try:
-                    vaultID = choice(self.wt.vaults)['id']
-                except IndexError:
-                    raise RuntimeError(
-                        "Attempted spend without existing delegations")
-
+            if block % 144 == 10: # once per day on the 10th block
                 # generate invalid spend, requires cancel
                 if random() < self.INVALID_SPEND_RATE:
-                    cancel_inputs = self.wt.process_cancel(vaultID, block)
-                    self.wt.finalize_cancel(vaultID)
-                    cancel_fee = sum(coin['amount'] for coin in cancel_inputs)
-                    cancel_fees.append([block, cancel_fees])
-                    print(f"Cancel! fee = {cancel_fee}")
+                    self.cancel_sequence(block)
                 # generate valid spend, requires processing
                 else:
-                    self.wt.process_spend(vaultID)
+                    try:
+                        self.spend_sequence(block)
+                    # Stop simulation, exit loop and report results
+                    except(DelegationError):
+                        print("Process Delegation FAILED.")
+                        break
+                    except(SpendAttemptError):
+                        print("Process Spend FAILED.")
+                        break
 
-                # snapshot coin pool after spend attempt
-                if "coin_pool" in subplots:
-                    amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                    pool_after_spend.append([block, amounts])
-
-            # Catastrophe
-            if block % 144 == 1:
+            if block % 144 == 50: #once per day on the 50th block
                 if random() < self.CATASTROPHE_RATE:
-                    print(f"Catastrophic breach detected at block {block}")
-                    for vault in self.wt.vaults:
-                        cancel_inputs = self.wt.process_cancel(vault['id'], block)
-                        self.wt.finalize_cancel(vault['id'])
-                        cancel_fee = sum(coin['amount'] for coin in cancel_inputs)
-                        cancel_fees.append([block, cancel_fees])
-                        print(f"Canceled spend from vault {vault['id']}! fee = {cancel_fee}")
+                    self.catastrophe_sequence(block)
 
-                    # snapshot coin pool after all spend attempts are cancelled
-                    if "coin_pool" in subplots:
-                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                        pool_after_spend.append([block, amounts])
-
-
-                    # Reboot operational flow with several vaults
-                    refill_amount = self.R(block+10)
-                    refill_amount = refill_amount*self.expected_active_vaults
-                    print(f"refilling at block {block + 10} by {refill_amount} to fill reserve to {self.required_reserve(block+10)}")
-                    self.wt.refill(refill_amount)
-
-                    # snapshot coin pool after refill Tx
-                    if "coin_pool" in subplots:
-                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                        pool_after_refill.append([block, amounts])
-
-                    # snapshot vault excesses before CF Tx
-                    if "vault_excesses" in subplots:
-                        vault_requirement = self.wt.fee_reserve_per_vault(block)
-                        excesses = []
-                        for vault in self.wt.vaults:
-                            excess = sum(
-                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                            if excess > 0:
-                                excesses.append(excess)
-                        vault_excess_before_cf.append([block, excesses])
-
-                    cf_fee = self.wt.consolidate_fanout(block + 10)
-                    print(f"consolidate-fanout Tx at block {block+10} with fee: {cf_fee}")
-
-                    # snapshot coin pool after CF Tx confirmation
-                    if "coin_pool" in subplots:
-                        amounts = [coin['amount'] for coin in self.wt.fbcoins]
-                        pool_after_cf.append([block+7, amounts])
-
-                    # snapshot vault excesses after CF Tx
-                    if "vault_excesses" in subplots:
-                        excesses = []
-                        for vault in self.wt.vaults:
-                            excess = sum(
-                                [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                            if excess > 0:
-                                excesses.append(excess)
-                        vault_excess_after_cf.append([block, excesses])
-
-                    for i in range(0,self.expected_active_vaults):
-                        print(f"processing delegation at block {block + 10}")
-                        vaultID = self.vaults_df['vaultID'][vault_count]
-                        vault_count += 1
-                        amount = 10e10 # 100 BTC
-                        self.wt.process_delegation(vaultID, amount, block + 10)
+                    # Reboot operation after catastrophe
+                    self.initialize_sequence(block+10)
 
 
             if "balance" in subplots:
@@ -290,7 +349,8 @@ class WTSim(object):
                 if (status['vaults_at_risk'] != 0) or (status['delegation_requires'] != 0):
                     risk_status.append(status)
             if "operations" in subplots or "cumulative_ops"in subplots:
-                costs.append([block, refill_fee, cf_fee, cancel_fee])
+                costs.append([block, self.refill_fee, self.cf_fee, self.cancel_fee])
+                self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
 
             if "coin_pool_age" in subplots:
                 try:
@@ -390,45 +450,58 @@ class WTSim(object):
 
         # Plot coin pool amounts vs block
         if "coin_pool" in subplots:
-            for frame in pool_after_refill:
+            for frame in self.pool_after_refill:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 pool_df = DataFrame(tuples, columns=['block', 'amount'])
                 pool_df.plot.scatter(x='block', y='amount', color='r',
                                      alpha=0.1, s=5, ax=axes[plot_num], label="After Refill")
-            for frame in pool_after_cf:
+            for frame in self.pool_after_cf:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 pool_df = DataFrame(tuples, columns=['block', 'amount'])
                 pool_df.plot.scatter(x='block', y='amount', color='g',
                                      alpha=0.1, s=5, ax=axes[plot_num], label="After CF")
-            for frame in pool_after_spend:
+            for frame in self.pool_after_spend:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 pool_df = DataFrame(tuples, columns=['block', 'amount'])
                 pool_df.plot.scatter(x='block', y='amount', color='b', alpha=0.1,
-                                     s=5, ax=axes[plot_num], label="After Spend Attempt")
+                                     s=5, ax=axes[plot_num], label="After Spend")
+            for frame in self.pool_after_cancel:
+                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
+                pool_df = DataFrame(tuples, columns=['block', 'amount'])
+                pool_df.plot.scatter(x='block', y='amount', color='k', alpha=0.1,
+                                     s=5, ax=axes[plot_num], label="After Cancel")
+            for frame in self.pool_after_catastrophe:
+                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
+                pool_df = DataFrame(tuples, columns=['block', 'amount'])
+                pool_df.plot.scatter(x='block', y='amount', color='o', alpha=0.1,
+                                     s=5, ax=axes[plot_num], label="After Catastrophe")
             handles, labels = axes[plot_num].get_legend_handles_labels()
-            if subplots[1] == "operations":  # FIX, find index
-                handles, _labels = axes[1].get_legend_handles_labels()
-            labels = set(labels)
-            axes[plot_num].legend(handles, labels, loc='upper right')
+            try:
+                i = subplots.index("operations")
+                handles, _labels = axes[i].get_legend_handles_labels()
+                labels = set(labels)
+                axes[plot_num].legend(handles, labels, loc='upper right')
+            except(ValueError):
+                pass
             axes[plot_num].set_title("Feebump Coin Pool")
             axes[plot_num].set_ylabel("Coin Amount (Satoshis)", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
         if "vault_excesses" in subplots:
-            for frame in vault_excess_after_cf:
+            for frame in self.vault_excess_after_cf:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 excesses_df = DataFrame(tuples, columns=['block', 'amount'])
                 # , label="After CF")
                 excesses_df.plot.scatter(
                     x='block', y='amount', color='r', ax=axes[plot_num])
-            for frame in vault_excess_after_delegation:
+            for frame in self.vault_excess_after_delegation:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 excesses_df = DataFrame(tuples, columns=['block', 'amount'])
                 # , label="After Delegation")
                 excesses_df.plot.scatter(
                     x='block', y='amount', color='g', ax=axes[plot_num])
-            for frame in vault_excess_before_cf:
+            for frame in self.vault_excess_before_cf:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 excesses_df = DataFrame(tuples, columns=['block', 'amount'])
                 excesses_df.plot.scatter(

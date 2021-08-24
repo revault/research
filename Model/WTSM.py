@@ -1,12 +1,9 @@
 """ 
 TODO:
 * simulate requirement for cancel feebump, then implement feebump algo
-* Optimise WTSM for multiple active vaults
-* Auto-generate report per simulation (running parameters, results, detailed data in tables)
 * Use integers for all values with units in satoshis
 * Add random time interval between balance low & re-fill trigger (to simulate slow stakeholder),
   to investigate time-at-risk. 
-* Replace feerate data src with own node info (indexed by block time) 
 * Consider ordering of outputs in fee generator for CF Tx
 * Make good documentation
 * Remove possibility for inconsistencies in progress of blocks with WTSim
