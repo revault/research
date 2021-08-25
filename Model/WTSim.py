@@ -9,8 +9,10 @@ class WTSim(object):
 
     def __init__(self, config, fname):
         # Stakeholder parameters
-        self.excess_delegations = 3
-        self.expected_active_vaults = 5
+        self.EXCESS_DELEGATIONS = 3
+        self.EXPECTED_ACTIVE_VAULTS = 3
+        self.REFILL_PERIOD = 144
+        self.DELEGATION_PERIOD = 144
 
         # Manager parameters
         self.INVALID_SPEND_RATE = 0.1
@@ -22,13 +24,13 @@ class WTSim(object):
 
         # Simulation report
         self.fname = fname
-        self.report_init = f"Watchtower config:\n{config}\nExcess delegations: {self.excess_delegations}\nExpected active vaults: {self.expected_active_vaults}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
+        self.report_init = f"Watchtower config:\n{config}\nExcess delegations: {self.EXCESS_DELEGATIONS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
 
     def required_reserve(self, block_height):
         required_reserve_per_vault = self.wt.fee_reserve_per_vault(
             block_height)
         num_vaults = len(self.wt.vaults)
-        return (num_vaults + self.excess_delegations)*required_reserve_per_vault
+        return (num_vaults + self.EXCESS_DELEGATIONS)*required_reserve_per_vault
 
     def R(self, block_height):
         """Returns amount to refill to ensure WT has sufficient balance.
@@ -38,7 +40,7 @@ class WTSim(object):
                  doesn't know which coins are allocated or not. 
         """
         bal = self.wt.balance()
-        reserve_total = sum(self.wt.O(block_height))*(len(self.wt.vaults)+self.excess_delegations)
+        reserve_total = sum(self.wt.O(block_height))*(len(self.wt.vaults)+self.EXCESS_DELEGATIONS)
         R = reserve_total - bal
         if R <= 0:
             return 0
@@ -65,7 +67,7 @@ class WTSim(object):
         ## Refill transition
         # WT provided with enough to allocate up to the expected number of active vaults
         initial_reserve_buffer_factor = 3
-        reserve_total =  sum(self.wt.O(block_height))*self.expected_active_vaults*initial_reserve_buffer_factor
+        reserve_total =  sum(self.wt.O(block_height))*self.EXPECTED_ACTIVE_VAULTS*initial_reserve_buffer_factor
 
         # Expected CF Tx fee
         try: 
@@ -74,7 +76,7 @@ class WTSim(object):
             feerate = self.wt._feerate(block_height)
         P2WPKH_INPUT_vBytes = 67.75
         P2WPKH_OUTPUT_vBytes = 31
-        expected_num_outputs = len(self.wt.O(block_height))*self.expected_active_vaults
+        expected_num_outputs = len(self.wt.O(block_height))*self.EXPECTED_ACTIVE_VAULTS
         expected_num_inputs = 1
         expected_cf_fee = (10.75 + expected_num_outputs*P2WPKH_OUTPUT_vBytes +
                             expected_num_inputs*P2WPKH_INPUT_vBytes)*feerate
@@ -118,7 +120,7 @@ class WTSim(object):
             self.pool_after_cf.append([block_height, amounts])
 
         ## Allocation transitions
-        for i in range(0,self.expected_active_vaults):
+        for i in range(0,self.EXPECTED_ACTIVE_VAULTS):
             vaultID = self.vaults_df['vaultID'][self.vault_count]
             self.vault_count += 1
             amount = 10e10 # 100 BTC
@@ -260,6 +262,14 @@ class WTSim(object):
             amounts = [coin['amount'] for coin in self.wt.fbcoins]
             self.pool_after_cancel.append([block_height, amounts])
 
+        # Compute overpayments
+        if "overpayments" in subplots:
+            try:
+                feerate = self.wt._estimate_smart_feerate(block_height)
+            except(ValueError, KeyError):
+                feerate = self.wt._feerate(block_height)
+            self.overpayments.append([block_height, self.cancel_fee-feerate])
+
     def catastrophe_sequence(self, block_height):
         print(f"Catastrophe sequence at block {block_height}")
         for vault in self.wt.vaults:
@@ -286,9 +296,7 @@ class WTSim(object):
 
         plt.style.use(['plot_style.txt'])              
 
-        self.refill_fee = None
-        self.cf_fee = None
-        self.cancel_fee = None
+        self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
         self.vault_count = 1
         
         self.subplots = subplots
@@ -300,6 +308,7 @@ class WTSim(object):
         self.vault_excess_before_cf = []
         self.vault_excess_after_cf = []
         self.vault_excess_after_delegation = []
+        self.overpayments = []
         balances = []
         risk_status = []
         costs = []
@@ -313,17 +322,16 @@ class WTSim(object):
 
         for block in range(start_block, end_block):
             try:
-                # Refill sequence spans 8 blocks
-                if block % 144 == 0: # once per day
-                # if block % 72 == 0: # twice per day
-                # if block % 36 == 0: # four times per day
-                # if block % 1 == 0: # each block
+                # Refill sequence spans 8 blocks, musn't begin another sequence 
+                # with period shorter than that.
+                if block % self.REFILL_PERIOD == 0: # once per day
                     self.refill_sequence(block)
 
-                if block % 144 == 20: # once per day on the 20th block
+                if block % self.DELEGATION_PERIOD == 20: # once per day on the 20th block
                     # generate invalid spend, requires cancel
                     if random() < self.INVALID_SPEND_RATE:
                         self.cancel_sequence(block)
+
                     # generate valid spend, requires processing
                     else:
                         self.spend_sequence(block)
@@ -339,7 +347,6 @@ class WTSim(object):
                 print(f"Allocation error at block {block}")
                 break
 
-
             if "balance" in subplots:
                 balances.append([block, self.wt.balance(),
                              self.required_reserve(block)])
@@ -347,7 +354,7 @@ class WTSim(object):
                 status = self.wt.risk_status(block)
                 if (status['vaults_at_risk'] != 0) or (status['delegation_requires'] != 0):
                     risk_status.append(status)
-            if "operations" in subplots or "cumulative_ops"in subplots:
+            if "operations" in subplots or "cumulative_ops" in subplots:
                 costs.append([block, self.refill_fee, self.cf_fee, self.cancel_fee])
                 self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
 
@@ -382,6 +389,7 @@ class WTSim(object):
                         switch = "good"
                         risk_off = block
                         wt_risk_time.append((risk_on, risk_off))
+
 
         figure, axes = plt.subplots(len(subplots), 1, sharex=True)
         plot_num = 0
@@ -509,7 +517,7 @@ class WTSim(object):
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
-        # Plot WT number of active vaults
+        # Plot WT risk status
         if "risk_status" in subplots:
             if risk_status != []:
                 risk_status_df = DataFrame(risk_status)
@@ -523,6 +531,20 @@ class WTSim(object):
                 axes[plot_num].set_xlabel("Block", labelpad=15)
                 ax2.set_ylabel("Satoshis", labelpad=15)
                 plot_num += 1
+
+        # Plot overpayments
+        if "overpayments" in subplots:
+            df = DataFrame(self.overpayments, columns = ["block","overpayments"])
+            df['cumulative']=df['overpayments'].cumsum()
+            df.set_index(['block'], inplace=True)
+            df['overpayments'].plot(ax=axes[plot_num], label="Singular", legend=True)
+            ax2 = axes[plot_num].twinx()
+            df['cumulative'].plot(ax=ax2, label="Cumulative", color='orange', legend=True)
+            axes[plot_num].set_xlabel("Block", labelpad=15)
+            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
+            axes[plot_num].set_title("Cancel Fee Overpayments")
+            plot_num += 1
+
 
         # Plot coin pool age
         if "coin_pool_age" in subplots:
@@ -599,7 +621,7 @@ if __name__ == '__main__':
     start_block = 200000 
     end_block = 681000
 
-    # "vault_excesses", "coin_pool_age", "coin_pool", "risk_status"]
+    # "overpayments", "vault_excesses", "coin_pool_age", "coin_pool", "risk_status"]
     subplots = ["balance", "operations", "cumulative_ops"]
     sim.plot_simulation(start_block, end_block, subplots)
 
