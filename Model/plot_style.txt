@@ -39,7 +39,7 @@ axes.spines.right : False
 axes.spines.top : False
 axes.grid: True
 figure.titlesize: 18
-figure.figsize: 4.15, 11.7
+figure.figsize: 5.3, 11.7
 
 savefig.dpi: 150      # figure dots per inch or 'figure'
 savefig.facecolor: w        # figure face color when saving

@@ -1,8 +1,6 @@
 from WTSM import *
 
-class DelegationError(Exception):
-    pass
-class SpendAttemptError(Exception):
+class AllocationError(Exception):
     pass
 
 class WTSim(object):
@@ -55,20 +53,18 @@ class WTSim(object):
         P2WPKH_INPUT_vBytes = 67.75
         P2WPKH_OUTPUT_vBytes = 31
         expected_num_outputs = len(self.wt.O(block_height))*new_reserves
-        expected_num_inputs = len(self.wt.O(block_height))*len(self.wt.vaults)  # guess...
+        expected_num_inputs = len(self.wt.O(block_height))*len(self.wt.vaults)
         expected_cf_fee = (10.75 + expected_num_outputs*P2WPKH_OUTPUT_vBytes +
                             expected_num_inputs*P2WPKH_INPUT_vBytes)*feerate
-
-        print(f"    Expected CF Tx fee: {expected_cf_fee}")
-        print(f"    Expected num outputs: {expected_num_outputs}")
 
         R += expected_cf_fee
         return R
 
     def initialize_sequence(self, block_height):
+        print(f"Initialize sequence at block {block_height}")
         ## Refill transition
         # WT provided with enough to allocate up to the expected number of active vaults
-        initial_reserve_buffer_factor = 2
+        initial_reserve_buffer_factor = 3
         reserve_total =  sum(self.wt.O(block_height))*self.expected_active_vaults*initial_reserve_buffer_factor
 
         # Expected CF Tx fee
@@ -84,8 +80,11 @@ class WTSim(object):
                             expected_num_inputs*P2WPKH_INPUT_vBytes)*feerate
 
         refill_amount = reserve_total + expected_cf_fee - self.wt.balance()
+        if refill_amount <= 0:
+            print(f"  Refill not required, WT has enough bitcoin")
+            return
         self.wt.refill(refill_amount)
-        print(f"inatialising WT with refill at block {block_height} by {refill_amount}")
+        print(f"  Refill transition at block {block_height} by {refill_amount}")
 
         # Track operational costs
         try:
@@ -111,7 +110,7 @@ class WTSim(object):
 
         ## Consolidate-fanout transition
         self.cf_fee = self.wt.consolidate_fanout(block_height)
-        print(f"consolidate-fanout Tx at block {block_height} with fee: {self.cf_fee}")
+        print(f"  Consolidate-fanout transition at block {block_height} with fee: {self.cf_fee}")
 
         # snapshot coin pool after CF Tx
         if "coin_pool" in self.subplots:
@@ -120,11 +119,10 @@ class WTSim(object):
 
         ## Allocation transitions
         for i in range(0,self.expected_active_vaults):
-            print(f"processing delegation at block {block_height}")
             vaultID = self.vaults_df['vaultID'][self.vault_count]
             self.vault_count += 1
             amount = 10e10 # 100 BTC
-            self.wt.process_delegation(vaultID, amount, block_height)
+            self.wt.allocate(vaultID, amount, block_height)
 
         # snapshot vault excesses after delegations
         if "vault_excesses" in self.subplots:
@@ -141,8 +139,9 @@ class WTSim(object):
     def refill_sequence(self, block_height):
         refill_amount = self.R(block_height)
         if refill_amount > 0:
+            print(f"Refill sequence at block {block_height}")
             ## Refill transition
-            print(f"refilling at block {block_height} by {refill_amount} to fill reserve")
+            print(f"  Refill transition at block {block_height} by {refill_amount}")
             self.wt.refill(refill_amount)
             try:
                 self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
@@ -168,7 +167,7 @@ class WTSim(object):
             ## Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
             self.cf_fee = self.wt.consolidate_fanout(block_height+1)
-            print(f"consolidate-fanout Tx at block {block_height+1} with fee: {self.cf_fee}")
+            print(f"  Consolidate-fanout transition at block {block_height+1} with fee: {self.cf_fee}")
 
             # snapshot coin pool after CF Tx confirmation
             if "coin_pool" in self.subplots:
@@ -183,37 +182,31 @@ class WTSim(object):
                         [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
                     if excess > 0:
                         excesses.append(excess)
-                self.vault_excess_after_cf.append([block_height, excesses])
+                self.vault_excess_after_cf.append([block_height+7, excesses])
 
-            ## Top up transition
+            ## Top up sequence
             # Top up delegations after confirmation of CF Tx, because consolidating coins
-            # reduces the fee_reserve of a vault
-            try:
-                self.wt.top_up_delegations(block_height+7)
-            except(RuntimeError):
-                pass
+            # can diminish the fee_reserve of a vault
+            self.top_up_sequence(block_height+7)
 
+                    
     def _spend_init(self,block_height):
-        ## Top up transition
+        ## Top up sequence
         # Top up delegations before processing a delegation, because time has passed, and we mustn't accept
         # delegation if the available coin pool is insufficient.
-        try:
-            self.wt.top_up_delegations(block_height)
-        except(RuntimeError):
-            pass
+        self.top_up_sequence(block_height)
 
         # Delegate a vault
-        print(f"processing delegation at block {block_height}")
         vaultID = self.vaults_df['vaultID'][self.vault_count]
         self.vault_count += 1
         amount = 10e10  # 100 BTC
 
         ## Allocation transition
-        # If WT fails to acknowledge delegation, exit the simulation and plot the outcome so-far
+        # If WT fails to acknowledge new delegation, raise AllocationError
         try:
-            self.wt.process_delegation(vaultID, amount, block_height)
+            self.wt.allocate(vaultID, amount, block_height)
         except(RuntimeError):
-            raise(DelegationError())
+            raise(AllocationError())
 
         # snapshot vault excesses after delegation
         if "vault_excesses" in self.subplots:
@@ -226,20 +219,26 @@ class WTSim(object):
                     excesses.append(excess)
             self.vault_excess_after_delegation.append([block_height, excesses])
 
-
         # choose a random vault to spend
-        try:
-            vaultID = choice(self.wt.vaults)['id']
-        except IndexError:
-            raise SpendAttemptError(
-                "Attempted spend without existing delegations")
+        vaultID = choice(self.wt.vaults)['id']
 
         return vaultID
 
+    def top_up_sequence(self, block_height):
+        # loop over copy since allocate may remove an element, changing list index
+        for vault in list(self.wt.vaults):
+            try:
+                ## Allocation transition
+                self.wt.allocate(vault['id'], vault['amount'], block_height)
+            except(RuntimeError):
+                print(f"  Allocation transition FAILED for vault {vault['id']}")
+                raise(AllocationError())
+
     def spend_sequence(self, block_height):
+        print(f"Spend sequence at block {block_height}")
         vaultID = self._spend_init(block_height)
         ## Spend transition
-        print(f"processing spend at block {block_height}")
+        print(f"  Spend transition at block {block_height}")
         self.wt.process_spend(vaultID)
 
         # snapshot coin pool after spend attempt
@@ -248,13 +247,13 @@ class WTSim(object):
             self.pool_after_spend.append([block_height, amounts])
 
     def cancel_sequence(self, block_height):
+        print(f"Cancel sequence at block {block_height}")
         vaultID = self._spend_init(block_height)
         ## Cancel transition
-        print(f"processing cancel at block {block_height}")
         cancel_inputs = self.wt.process_cancel(vaultID, block_height)
         self.wt.finalize_cancel(vaultID)
         self.cancel_fee = sum(coin['amount'] for coin in cancel_inputs)
-        print(f"Cancel! fee = {self.cancel_fee}")
+        print(f"  Cancel transition with vault {vaultID} for fee: {self.cancel_fee}")
 
         # snapshot coin pool after cancel
         if "coin_pool" in self.subplots:
@@ -262,7 +261,7 @@ class WTSim(object):
             self.pool_after_cancel.append([block_height, amounts])
 
     def catastrophe_sequence(self, block_height):
-        print(f"Catastrophic breach detected at block {block_height}")
+        print(f"Catastrophe sequence at block {block_height}")
         for vault in self.wt.vaults:
             ## Cancel transition
             cancel_inputs = self.wt.process_cancel(vault['id'], block_height)
@@ -276,7 +275,7 @@ class WTSim(object):
             except(TypeError):
                 cancel_fee = sum(coin['amount'] for coin in cancel_inputs)
                 self.cancel_fee = cancel_fee
-            print(f"Canceled spend from vault {vault['id']}! fee = {cancel_fee}")
+            print(f"  Cancel transition with vault {vault['id']} for fee: {cancel_fee}")
 
         # snapshot coin pool after all spend attempts are cancelled
         if "coin_pool" in self.subplots:
@@ -313,32 +312,32 @@ class WTSim(object):
         self.initialize_sequence(start_block)
 
         for block in range(start_block, end_block):
-            # if block % 144 == 0: # once per day
-            if block % 1 == 0: # each block
-                self.refill_sequence(block)
+            try:
+                # Refill sequence spans 8 blocks
+                if block % 144 == 0: # once per day
+                # if block % 72 == 0: # twice per day
+                # if block % 36 == 0: # four times per day
+                # if block % 1 == 0: # each block
+                    self.refill_sequence(block)
 
-            if block % 144 == 10: # once per day on the 10th block
-                # generate invalid spend, requires cancel
-                if random() < self.INVALID_SPEND_RATE:
-                    self.cancel_sequence(block)
-                # generate valid spend, requires processing
-                else:
-                    try:
+                if block % 144 == 20: # once per day on the 20th block
+                    # generate invalid spend, requires cancel
+                    if random() < self.INVALID_SPEND_RATE:
+                        self.cancel_sequence(block)
+                    # generate valid spend, requires processing
+                    else:
                         self.spend_sequence(block)
-                    # Stop simulation, exit loop and report results
-                    except(DelegationError):
-                        print("Process Delegation FAILED.")
-                        break
-                    except(SpendAttemptError):
-                        print("Process Spend FAILED.")
-                        break
 
-            if block % 144 == 50: #once per day on the 50th block
-                if random() < self.CATASTROPHE_RATE:
-                    self.catastrophe_sequence(block)
+                if block % 144 == 70: #once per day on the 70th block
+                    if random() < self.CATASTROPHE_RATE:
+                        self.catastrophe_sequence(block)
 
-                    # Reboot operation after catastrophe
-                    self.initialize_sequence(block+10)
+                        # Reboot operation after catastrophe
+                        self.initialize_sequence(block+10)
+            # Stop simulation, exit loop and report results
+            except(AllocationError):
+                print(f"Allocation error at block {block}")
+                break
 
 
             if "balance" in subplots:
@@ -597,7 +596,7 @@ if __name__ == '__main__':
 
     sim = WTSim(config, fname)
 
-    start_block = 100000 
+    start_block = 200000 
     end_block = 681000
 
     # "vault_excesses", "coin_pool_age", "coin_pool", "risk_status"]

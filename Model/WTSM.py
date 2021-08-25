@@ -362,7 +362,7 @@ class WTSM():
         num_new_reserves = total_to_process//(sum(O))
 
         if num_new_reserves == 0:
-            print(f"        CF Tx failed sice num_new_reserves = 0 (not accounting for expected fee")
+            print(f"        CF Tx failed sice num_new_reserves = 0 (not accounting for expected fee)")
             # Not enough in available coins to fanout to 1 complete fee_reserve, so return
             # to initial state and return 0 (as in, 0 fee paid)
             self.fbcoins = fbcoins_copy
@@ -452,10 +452,27 @@ class WTSM():
                          num_inputs*P2WPKH_INPUT_vBytes)*feerate
             return cf_tx_fee
 
-    def process_delegation(self, vaultID, amount, block_height):
-        """Stakeholder attempts to delegate a new vault to WT. WT computes if it can accept 
-           delegation, raises an error if it cannot. 
+    def allocate(self, vaultID, amount, block_height):
+        """WT allocates coins to a (new/existing) vault if there is enough 
+           available coins to meet the requirement. 
         """
+        # Recovery state
+        fbcoins_copy = list(self.fbcoins)
+        vaults_copy = list(self.vaults)
+
+        try:
+            # If vault already exists, de-allocate its current fee reserve first
+            vault = next(vault for vault in self.vaults if vault['id']==vaultID)
+            if self.under_requirement(vault['fee_reserve'], block_height) == 0:
+                return
+            else:
+                print(f"  Allocation transition to an existing vault {vaultID} at block {block_height}")
+                for coin in vault['fee_reserve']:
+                    coin['allocation'] = None
+                self.vaults.remove(vault)
+        except(StopIteration):
+            print(f"  Allocation transition to new vault {vaultID} at block {block_height}")
+
         total_unallocated = round(sum(
             [coin['amount'] for coin in self.fbcoins if (coin['allocation'] == None) & (coin['processed'] != None)]), 0)
         required_reserve = self.fee_reserve_per_vault(block_height)
@@ -463,6 +480,8 @@ class WTSM():
         Vm = self.Vm(block_height)
         print(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
         if int(required_reserve) > int(total_unallocated):
+            self.fbcoins = fbcoins_copy
+            self.vaults = vaults_copy
             raise RuntimeError(f"Watchtower doesn't ackknowledge delegation for vault {vaultID} since total un-allocated and processed fee-reserve is insufficient")
 
         # WT begins allocating feebump coins to this new vault and finally updates the vault's fee_reserve
@@ -480,14 +499,17 @@ class WTSM():
                                            'allocation': vaultID, 'processed': fbcoin['processed']})
                             fee_reserve.append(fbcoin)
                             Vm_found = True
-                            print(f"    Vm = {fbcoin['amount']} coin found with tolerance {tol}")
+                            print(f"    Vm = {fbcoin['amount']} coin found with tolerance {tol*100}%, added to fee reserve")
                             break
                         except(StopIteration):
-                            print(f"    No coin found for Vm = {Vm} with tolerance {tol}")
+                            if tol == tolerances[-1]:
+                                print(f"    No coin found for Vm = {Vm} with tolerance {tol*100}%")
                             continue
                 available = [coin for coin in self.fbcoins if (
                     coin['allocation'] == None) & (coin['processed'] != None)]
                 if available == []:
+                    self.fbcoins = fbcoins_copy
+                    self.vaults = vaults_copy   
                     raise(RuntimeError(f"No available coins for delegation"))
                 # Scan through remaining coins (ignoring Vm-sized first)
                 for tol in tolerances[::-1]:
@@ -498,10 +520,11 @@ class WTSM():
                         fbcoin.update({'idx': fbcoin['idx'], 'amount': fbcoin['amount'],
                                        'allocation': vaultID, 'processed': fbcoin['processed']})
                         fee_reserve.append(fbcoin)
-                        print(f"    Coin of size {fbcoin['amount']} added to the fee_reserve")
+                        print(f"    Coin of size {fbcoin['amount']} added to the fee reserve")
                         break
                     except(StopIteration):
-                        print(f"    No coin found with size other than Vm = {Vm} with tolerance {tol}")
+                        if tol == tolerances[::-1][-1]:
+                            print(f"    No coin found with size other than Vm = {Vm} with tolerance {tol*100}%")
 
                 # Allocate additional Vm coins if no other available coins
                 all_Vm = all((1+tolerances[0])*Vm >= coin['amount']
@@ -520,95 +543,6 @@ class WTSM():
             # Successful new delegation and allocation!
             self.vaults.append(
                 {"id": vaultID, "amount": amount, "fee_reserve": fee_reserve})
-
-    def top_up_delegations(self, block_height):
-        """When the fee_reserve of a vault becomes insufficient, additional feebump coins should
-           be allocated to that vault until it has the required fee reserve.
-
-           This process should occur after a CF or refill tx.
-        """
-        # Optimistically assumes that the coin_pool is sufficiently filled to top up all
-        # delegations, but raises RuntimeError if assumption is false.
-
-        Vm = self.Vm(block_height)
-
-        # Determine which vaults have insufficient fee_reserves (based on current fee-market)
-        # and allocate the appropriate fbcoins.
-        for vault in self.vaults:
-            top_up_amount = self.under_requirement(
-                vault['fee_reserve'], block_height)
-            if top_up_amount == 0:
-                continue
-            else:
-                print(f"  {vault['id']} under requirement by {top_up_amount}, topping up...")
-                Vm_found = False
-                reserve_top_up = []
-                tolerances = [0.1, 0.2, 0.3, 0.4, 0.5]
-
-                # Is there a Vm sized coin in the vault?
-                for tol in tolerances:
-                    try:
-                        Vm_coin = next(coin for coin in vault['fee_reserve'] if (coin['allocation'] == None) & (
-                            (1+tol)*Vm >= coin['amount'] >= ((1-tol)*Vm)))
-                        Vm_found = True
-                        break
-                    except(StopIteration):
-                        print(f"    No coin found for Vm = {Vm} with tolerance {tol}")
-                        continue
-
-                # Allocate coins to the vault, with "smart" process
-                while sum([coin['amount'] for coin in reserve_top_up]) < top_up_amount:
-                    # If not, try to find a Vm-sized coin and allocate it to the vault
-                    if Vm_found == False:
-                        for tol in tolerances:
-                            try:
-                                # Doesn't need to be 'processed' if it is the correct size already
-                                fbcoin = next(coin for coin in self.fbcoins if (coin['allocation'] == None) & (
-                                    (1+tol)*Vm >= coin['amount'] >= ((1-tol)*Vm)))
-                                fbcoin.update({'idx': fbcoin['idx'], 'amount': fbcoin['amount'],
-                                               'allocation': vault['id'], 'processed': fbcoin['processed']})
-                                reserve_top_up.append(fbcoin)
-                                Vm_found = True
-                                print(f"    Vm = {fbcoin['amount']} coin found with tolerance {tol}")
-                                break # from for loop
-                            except(StopIteration):
-                                print(f"    No coin found for Vm = {Vm} with tolerance {tol}")
-                                continue # for loop
-                    diff = sum([coin['amount']
-                                for coin in reserve_top_up]) - top_up_amount
-                    if diff <= 0:
-                        break # out of while loop
-
-                    available = [coin for coin in self.fbcoins if (
-                        coin['allocation'] == None) & (coin['processed'] != None)]
-                    if available == []:
-                        raise(RuntimeError(f"No available coins for delegation"))
-
-                    # Try to find smallest coin that covers the diff
-                    try:
-                        fbcoin = min([coin for coin in available if coin['amount'] >= diff], key=lambda c: c['amount'])
-                        fbcoin.update({'idx': fbcoin['idx'], 'amount': fbcoin['amount'],
-                                       'allocation': vault['id'], 'processed': fbcoin['processed']})
-                        reserve_top_up.append(fbcoin)
-                        print(f"    Coin of size {fbcoin['amount']} allocated to the vault")
-                        break  # out of while loop
-                    # If no coins cover the diff, allocate the largest coin and try again
-                    except(ValueError):
-                        fbcoin = max(available, key=lambda c: c['amount'])
-                        fbcoin.update({'idx': fbcoin['idx'], 'amount': fbcoin['amount'],
-                                       'allocation': vault['id'], 'processed': fbcoin['processed']})
-                        reserve_top_up.append(fbcoin)
-                        print(f"    Coin of size {fbcoin['amount']} allocated to the vault")
-                        continue  # while loop
-
-                vault['fee_reserve'].extend(reserve_top_up)
-
-                required_reserve = self.fee_reserve_per_vault(block_height)
-                new_reserve_total = sum([coin['amount']
-                                         for coin in vault['fee_reserve']])
-                if new_reserve_total < required_reserve:
-                    raise(RuntimeError(f"Not enough available coins to top up vault {vault['id']}"))
-                print(f"    Reserve for vault {vault['id']} has excess of {new_reserve_total-required_reserve}")
 
     def process_cancel(self, vaultID, block_height):
         """The cancel must be updated with a fee (the large Vm allocated to it).
