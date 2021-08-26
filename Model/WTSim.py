@@ -9,7 +9,7 @@ class WTSim(object):
 
     def __init__(self, config, fname):
         # Stakeholder parameters
-        self.EXCESS_DELEGATIONS = 3
+        self.EXCESS_DELEGATIONS = 7
         self.EXPECTED_ACTIVE_VAULTS = 3
         self.REFILL_PERIOD = 144
         self.DELEGATION_PERIOD = 144
@@ -24,7 +24,7 @@ class WTSim(object):
 
         # Simulation report
         self.fname = fname
-        self.report_init = f"Watchtower config:\n{config}\nExcess delegations: {self.EXCESS_DELEGATIONS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
+        self.report_init = f"Watchtower config:\n{config}\nExcess delegations: {self.EXCESS_DELEGATIONS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nRefill period: {self.REFILL_PERIOD}\nDelegation period: {self.DELEGATION_PERIOD}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
 
     def required_reserve(self, block_height):
         required_reserve_per_vault = self.wt.fee_reserve_per_vault(
@@ -40,7 +40,7 @@ class WTSim(object):
                  doesn't know which coins are allocated or not. 
         """
         bal = self.wt.balance()
-        reserve_total = sum(self.wt.O(block_height))*(len(self.wt.vaults)+self.EXCESS_DELEGATIONS)
+        reserve_total = sum(self.wt.O(block_height))*(self.EXPECTED_ACTIVE_VAULTS+self.EXCESS_DELEGATIONS)
         R = reserve_total - bal
         if R <= 0:
             return 0
@@ -65,59 +65,43 @@ class WTSim(object):
     def initialize_sequence(self, block_height):
         print(f"Initialize sequence at block {block_height}")
         ## Refill transition
-        # WT provided with enough to allocate up to the expected number of active vaults
-        initial_reserve_buffer_factor = 3
-        reserve_total =  sum(self.wt.O(block_height))*self.EXPECTED_ACTIVE_VAULTS*initial_reserve_buffer_factor
-
-        # Expected CF Tx fee
-        try: 
-            feerate = self.wt._estimate_smart_feerate(block_height)
-        except(ValueError, KeyError):
-            feerate = self.wt._feerate(block_height)
-        P2WPKH_INPUT_vBytes = 67.75
-        P2WPKH_OUTPUT_vBytes = 31
-        expected_num_outputs = len(self.wt.O(block_height))*self.EXPECTED_ACTIVE_VAULTS
-        expected_num_inputs = 1
-        expected_cf_fee = (10.75 + expected_num_outputs*P2WPKH_OUTPUT_vBytes +
-                            expected_num_inputs*P2WPKH_INPUT_vBytes)*feerate
-
-        refill_amount = reserve_total + expected_cf_fee - self.wt.balance()
+        refill_amount = self.R(block_height)
         if refill_amount <= 0:
             print(f"  Refill not required, WT has enough bitcoin")
-            return
-        self.wt.refill(refill_amount)
-        print(f"  Refill transition at block {block_height} by {refill_amount}")
+        else:
+            self.wt.refill(refill_amount)
+            print(f"  Refill transition at block {block_height} by {refill_amount}")
 
-        # Track operational costs
-        try:
-            self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
-        except(ValueError, KeyError):
-            self.refill_fee = 109.5 * self.wt._feerate(block_height)
+            # Track operational costs
+            try:
+                self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
+            except(ValueError, KeyError):
+                self.refill_fee = 109.5 * self.wt._feerate(block_height)
 
-        # snapshot coin pool after refill Tx
-        if "coin_pool" in self.subplots:
-            amounts = [coin['amount'] for coin in self.wt.fbcoins]
-            self.pool_after_refill.append([block_height, amounts])
+            # snapshot coin pool after refill Tx
+            if "coin_pool" in self.subplots:
+                amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                self.pool_after_refill.append([block_height, amounts])
 
-        # snapshot vault excesses before CF Tx
-        if "vault_excesses" in self.subplots:
-            vault_requirement = self.wt.fee_reserve_per_vault(block_height)
-            excesses = []
-            for vault in self.wt.vaults:
-                excess = sum(
-                    [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
-                if excess > 0:
-                    excesses.append(excess)
-            self.vault_excess_before_cf.append([block_height, excesses])
+            # snapshot vault excesses before CF Tx
+            if "vault_excesses" in self.subplots:
+                vault_requirement = self.wt.fee_reserve_per_vault(block_height)
+                excesses = []
+                for vault in self.wt.vaults:
+                    excess = sum(
+                        [coin['amount'] for coin in vault['fee_reserve']]) - vault_requirement
+                    if excess > 0:
+                        excesses.append(excess)
+                self.vault_excess_before_cf.append([block_height, excesses])
 
-        ## Consolidate-fanout transition
-        self.cf_fee = self.wt.consolidate_fanout(block_height)
-        print(f"  Consolidate-fanout transition at block {block_height} with fee: {self.cf_fee}")
+            ## Consolidate-fanout transition
+            self.cf_fee = self.wt.consolidate_fanout(block_height)
+            print(f"  Consolidate-fanout transition at block {block_height} with fee: {self.cf_fee}")
 
-        # snapshot coin pool after CF Tx
-        if "coin_pool" in self.subplots:
-            amounts = [coin['amount'] for coin in self.wt.fbcoins]
-            self.pool_after_cf.append([block_height, amounts])
+            # snapshot coin pool after CF Tx
+            if "coin_pool" in self.subplots:
+                amounts = [coin['amount'] for coin in self.wt.fbcoins]
+                self.pool_after_cf.append([block_height, amounts])
 
         ## Allocation transitions
         for i in range(0,self.EXPECTED_ACTIVE_VAULTS):
@@ -145,6 +129,7 @@ class WTSim(object):
             ## Refill transition
             print(f"  Refill transition at block {block_height} by {refill_amount}")
             self.wt.refill(refill_amount)
+
             try:
                 self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
             except(ValueError, KeyError):
@@ -610,7 +595,7 @@ if __name__ == '__main__':
     # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
     config = {
         "n_stk": 7, "n_man": 3, "reserve_strat": "CUMMAX95Q90", "estimate_strat": "ME30",
-        "O_version": 0, "I_version": 1, "feerate_src": "../block_fees/historical_fees.csv", 
+        "O_version": 0, "I_version": 2, "feerate_src": "../block_fees/historical_fees.csv", 
         "estimate_smart_feerate_src": "fee_estimates_fine.csv", "weights_src": "tx_weights.csv",
         "block_datetime_src": "block_height_datetime.csv"
     }

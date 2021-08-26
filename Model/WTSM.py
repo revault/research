@@ -99,15 +99,12 @@ class WTSM():
             if self.reserve_strat == '95Q30':
                 self.feerate_df['95Q30'] = self.feerate_df['MeanFeerate'].rolling(thirtyD, min_periods=144).quantile(
                     quantile=0.95, interpolation='linear')
-
             elif self.reserve_strat == '95Q90':
                 self.feerate_df['95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
                     quantile=0.95, interpolation='linear')
-
             elif self.reserve_strat == 'CUMMAX95Q90':
                 self.feerate_df['CUMMAX95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
                     quantile=0.95, interpolation='linear').cummax()
-
             else:
                 raise ValueError("Strategy not implemented")
 
@@ -325,6 +322,51 @@ class WTSM():
         total_to_process = total_unprocessed + total_negligible + total_old
         return total_to_process, num_inputs
 
+    def I2(self, block_height):
+        """Select coins to consume as inputs for the tx transaction,
+           remove them from P and V.
+           - unprocessed
+           - unallocated and not in O(t) and old
+           - negligible
+
+           Return: total amount of consumed inputs, number of inputs 
+        """
+        O = self.O(block_height)
+        num_inputs = 0
+
+        # Take all fbcoins that haven't been processed, get their total amount,
+        # and remove them from self.fbcoins
+        total_unprocessed = 0
+        # loop over copy of the list since the remove() method changes list indexing
+        for coin in list(self.fbcoins):
+            if coin['processed'] == None:
+                total_unprocessed += coin['amount']
+                self._remove_coin(coin)
+                num_inputs += 1
+
+        # Take all unallocated, old, and not in O fbcoins, get their total amount,
+        # and remove them from self.fbcoins
+        total_unallocated = 0
+        old_age = 12*7*144  # 13 weeks worth of blocks
+        for coin in list(self.fbcoins):
+            if coin['allocation'] == None and coin['amount'] not in O:
+                if (block_height - coin['processed'] > old_age):
+                    total_unallocated += coin['amount']
+                    self._remove_coin(coin)
+                    num_inputs += 1
+
+        # Take all fbcoins that are negligible, get their total amount, and remove
+        # them from self.fbcoins and their associated vault's fee_reserve
+        total_negligible = 0
+        for coin in list(self.fbcoins):
+            if self.is_negligible(coin, block_height):
+                total_negligible += coin['amount']
+                self._remove_coin(coin)
+                num_inputs += 1
+
+        total_to_process = total_unprocessed + total_unallocated + total_negligible
+        return total_to_process, num_inputs        
+
     def consolidate_fanout(self, block_height):
         """Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from 
            new re-fills that enable accurate feebumping and 2) to consolidate negligible feebump coins
@@ -354,6 +396,8 @@ class WTSM():
             total_to_process, num_inputs = self.I0(block_height)
         elif self.I_version == 1:
             total_to_process, num_inputs = self.I1(block_height)
+        elif self.I_version == 2:
+            total_to_process, num_inputs = self.I2(block_height)
         
         # Counter for number of outputs of the CF Tx
         num_outputs = 0
@@ -488,9 +532,9 @@ class WTSM():
         else:
             fee_reserve = []
             tolerances = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
-            Vm_found = False
+            search_Vm = True
             while sum([coin['amount'] for coin in fee_reserve]) < required_reserve:
-                if Vm_found == False:
+                if search_Vm == True:
                     for tol in tolerances:
                         try:
                             fbcoin = next(coin for coin in self.fbcoins if (coin['allocation'] == None) & (
@@ -498,12 +542,13 @@ class WTSM():
                             fbcoin.update({'idx': fbcoin['idx'], 'amount': fbcoin['amount'],
                                            'allocation': vaultID, 'processed': fbcoin['processed']})
                             fee_reserve.append(fbcoin)
-                            Vm_found = True
+                            search_Vm = False
                             print(f"    Vm = {fbcoin['amount']} coin found with tolerance {tol*100}%, added to fee reserve")
                             break
                         except(StopIteration):
                             if tol == tolerances[-1]:
                                 print(f"    No coin found for Vm = {Vm} with tolerance {tol*100}%")
+                                search_Vm = False
                             continue
                 available = [coin for coin in self.fbcoins if (
                     coin['allocation'] == None) & (coin['processed'] != None)]
