@@ -50,10 +50,11 @@ class WTSM():
         # analysis strategy over historical feerates for Vm
         self.estimate_strat = config['estimate_strat']
 
-        self.num_Vb_coins = 7
-
         self.O_version = config['O_version']
         self.I_version = config['I_version']
+
+        self.O_0_factor = 7 # num of Vb coins
+        self.O_1_factor = 1.75 # multiplier M
 
     def _get_block_datetime(self, block_num):
         """Return datetime associated with given block number."""
@@ -166,7 +167,7 @@ class WTSM():
         """
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = (reserve - self.Vm(block_height))/self.num_Vb_coins
+        t1 = (reserve - self.Vm(block_height))/self.O_0_factor
         t2 = reserve_rate*(272.0/4) + self._feerate_to_fee(10, 'cancel', 0)
         return max(t1, t2)
 
@@ -177,51 +178,34 @@ class WTSM():
            There should be at least 1 Vm sized coin in O.
         """
         # Strategy 0
-        # O = [Vm, Vb, Vb, ...Vb]  with 1 + self.num_Vb_coins elements
+        # O = [Vm, Vb, Vb, ...Vb]  with 1 + self.O_0_factor elements
         if self.O_version == 0:
             Vm = self.Vm(block_height)
             Vb = self.Vb(block_height)
-            O = [Vb for i in range(self.num_Vb_coins)]
+            O = [Vb for i in range(self.O_0_factor)]
             O.insert(0, Vm)
             return O
 
         # Strategy 1
-        # O = [Vm, M*Vm, (M^2)Vm, (M^3)Vm, ....]
+        # O = [Vm, MVm, 2MVm, 3MVm, ...]
         if self.O_version == 1:
-            reserve = self.fee_reserve_per_vault(block_height)
+            frpv = int(self.fee_reserve_per_vault(block_height))
             Vm = self.Vm(block_height)
-            M = 1.2  # Factor increase per coin
-            # FIXME: What is a better way than to hard code this range?
-            O = [Vm*(M**i) for i in range(0, 15)]
-            cumO = []
-            for x in O:
-                cumO.append(x+sum(cumO))
-            for (x, y) in list(zip(O, cumO)):
-                if y > reserve:
-                    cumO.remove(y)
-                    O.remove(x)
-            diff = reserve - sum(O)
-            # If the difference isn't significant (i.e. it's smaller than Vm), add the diff to the final
-            # coin. Else, create a new coin of amount equal to the difference.
-            if diff < O[0]:
-                O[-1] += diff
+            M = self.O_1_factor # Factor increase per coin
+            O = [Vm]
+            while sum(O) < frpv:
+                O.append(int((len(O))*M*Vm))
+            diff = sum(O) - frpv
+            # find the minimal subset sum of elements that is greater than diff, and remove them
+            subset = []
+            while sum(subset) < diff:
+                subset.append(O.pop())
+            excess = sum(subset) - diff
+            if excess >= Vm:
+                O.append(excess)
             else:
-                O.append(diff)
-            return O
-
-        # Strategy 2
-        # O = [Vm, Vm, Vm, Vm, ..., Vm*]
-        if self.O_version == 2:
-            reserve = self.fee_reserve_per_vault(block_height)
-            Vm = self.Vm(block_height)
-            O = []
-            while sum(O) <= reserve:
-                O.append(Vm)
-            if len(O) > 1:
-                O.pop()
-            O[-1] += reserve - sum(O)
-            assert(sum(O) == reserve)
-            return O
+                O[-1] += excess
+            return O       
 
     def balance(self):
         return sum([coin['amount'] for coin in self.fbcoins])
@@ -319,8 +303,8 @@ class WTSM():
                     self._remove_coin(coin)
                     num_inputs += 1
 
-        total_to_process = total_unprocessed + total_negligible + total_old
-        return total_to_process, num_inputs
+        total_to_consume = total_unprocessed + total_negligible + total_old
+        return total_to_consume, num_inputs
 
     def I2(self, block_height):
         """Select coins to consume as inputs for the tx transaction,
@@ -364,8 +348,8 @@ class WTSM():
                 self._remove_coin(coin)
                 num_inputs += 1
 
-        total_to_process = total_unprocessed + total_unallocated + total_negligible
-        return total_to_process, num_inputs        
+        total_to_consume = total_unprocessed + total_unallocated + total_negligible
+        return total_to_consume, num_inputs        
 
     def consolidate_fanout(self, block_height):
         """Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from 
@@ -389,21 +373,21 @@ class WTSM():
 
         # Set target values for our coin creation amounts
         O = self.O(block_height)
-
+ 
         # Select and consume inputs with I(t), returning the total amount and the 
         # number of inputs.
         if self.I_version == 0:
-            total_to_process, num_inputs = self.I0(block_height)
+            total_to_consume, num_inputs = self.I0(block_height)
         elif self.I_version == 1:
-            total_to_process, num_inputs = self.I1(block_height)
+            total_to_consume, num_inputs = self.I1(block_height)
         elif self.I_version == 2:
-            total_to_process, num_inputs = self.I2(block_height)
+            total_to_consume, num_inputs = self.I2(block_height)
         
         # Counter for number of outputs of the CF Tx
         num_outputs = 0
 
         # Now create a distribution of new coins
-        num_new_reserves = total_to_process//(sum(O))
+        num_new_reserves = total_to_consume//(sum(O))
 
         if num_new_reserves == 0:
             print(f"        CF Tx failed sice num_new_reserves = 0 (not accounting for expected fee)")
@@ -432,7 +416,7 @@ class WTSM():
                      num_inputs*P2WPKH_INPUT_vBytes)*feerate
 
         # If there is any remainder, use it first to pay the fee for this transaction
-        remainder = total_to_process - (num_new_reserves*sum(O))
+        remainder = total_to_consume - (num_new_reserves*sum(O))
 
         # Check if remainder would cover the fee for the tx, if so, add the remainder-fee to the final new coin
         if remainder > cf_tx_fee:
@@ -440,7 +424,7 @@ class WTSM():
             return cf_tx_fee
         else:
             if num_new_reserves == 1:
-                print(f"        CF Tx failed sice num_new_reserves = 0 (accounting for expected fee")
+                print(f"        CF Tx failed sice num_new_reserves = 0 (accounting for expected fee)")
                 # Not enough in available coins to fanout to 1 complete fee_reserve, when accounting
                 # for the fee, so return to initial state and return 0 (as in, 0 fee paid)
                 self.fbcoins = fbcoins_copy
@@ -454,11 +438,12 @@ class WTSM():
             # and use them to pay for the tx (starts with last coin of O(t) in the latest reserve, 
             # and works backwards). If consumed entirely, the fee no longer needs to account for 
             # that output's size.
-            outputs = list(self.fbcoins[:-num_outputs-1:-1])
+            if self.O_version == 0:
+                outputs = list(self.fbcoins[:-num_outputs-1:-1])
+            # Take from largest first
+            if self.O_version == 1:
+                outputs = sorted(list(self.fbcoins[:-num_outputs-1:-1]), key=lambda coin: coin['amount'], reverse=True)
 
-            # FIXME: sorting methods will be different depending on O
-            # outputs = sorted(list(self.fbcoins[:-num_outputs-1:-1]), key=lambda coin: coin['amount'], reverse=True)
-            # outputs = sorted(list(self.fbcoins[:-num_outputs-1:-1]), key=lambda coin: coin['amount'])
 
             for coin in outputs:
                 # This coin is sufficient

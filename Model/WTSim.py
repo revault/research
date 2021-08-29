@@ -9,9 +9,9 @@ class WTSim(object):
 
     def __init__(self, config, fname):
         # Stakeholder parameters
-        self.EXCESS_DELEGATIONS = 7
-        self.EXPECTED_ACTIVE_VAULTS = 3
-        self.REFILL_PERIOD = 144
+        self.REFILL_EXCESS = 10
+        self.EXPECTED_ACTIVE_VAULTS = 5
+        self.REFILL_PERIOD = 144*7
         self.DELEGATION_PERIOD = 144
 
         # Manager parameters
@@ -24,28 +24,31 @@ class WTSim(object):
 
         # Simulation report
         self.fname = fname
-        self.report_init = f"Watchtower config:\n{config}\nExcess delegations: {self.EXCESS_DELEGATIONS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nRefill period: {self.REFILL_PERIOD}\nDelegation period: {self.DELEGATION_PERIOD}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
+        self.report_init = f"Watchtower config:\n{config}\nRefill excess: {self.REFILL_EXCESS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nRefill period: {self.REFILL_PERIOD}\nDelegation period: {self.DELEGATION_PERIOD}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
 
     def required_reserve(self, block_height):
+        """The amount the WT should have in reserve based on the number of active vaults
+        """
         required_reserve_per_vault = self.wt.fee_reserve_per_vault(
             block_height)
         num_vaults = len(self.wt.vaults)
-        return (num_vaults + self.EXCESS_DELEGATIONS)*required_reserve_per_vault
+        return (num_vaults)*required_reserve_per_vault
 
     def R(self, block_height):
-        """Returns amount to refill to ensure WT has sufficient balance.
+        """Returns amount to refill to ensure WT has sufficient operating balance.
            Used by stakeholder wallet software. 
 
-           Note: stakeholder knows WT's balance and num_vaults. Stakeholder
-                 doesn't know which coins are allocated or not. 
+           Note: stakeholder knows WT's balance and num_vaults (or EXPECTED_ACTIVE_VAULTS).
+                 Stakeholder doesn't know which coins are allocated or not. 
         """
         bal = self.wt.balance()
-        reserve_total = sum(self.wt.O(block_height))*(self.EXPECTED_ACTIVE_VAULTS+self.EXCESS_DELEGATIONS)
-        R = reserve_total - bal
+        frpv = self.wt.fee_reserve_per_vault(block_height)
+        reserve_total = frpv*(self.EXPECTED_ACTIVE_VAULTS+self.REFILL_EXCESS)
+        R = (reserve_total - bal)
         if R <= 0:
             return 0
 
-        new_reserves = R//(sum(self.wt.O(block_height)))
+        new_reserves = R//(frpv)
 
         # Expected CF Tx fee
         try: 
@@ -391,6 +394,8 @@ class WTSim(object):
 
         costs_df = DataFrame(
             costs, columns=['block', 'Refill Fee', 'CF Fee', 'Cancel Fee'])
+        report += f"Refill operations: {costs_df['Refill Fee'].count()}\n"
+
         # Plot refill amount vs block, operating expense vs block
         if "operations" in subplots:
             costs_df.plot.scatter(x='block', y='Refill Fee', s=6,
@@ -543,59 +548,57 @@ class WTSim(object):
         plt.savefig(f"Results/{self.fname}.png")
         # plt.show()
 
-    def plot_strategic_values(self, start_block, end_block, estimate_strat, reserve_strat):
+    def plot_strategic_values(self, start_block, end_block, estimate_strat, reserve_strat, O_version):
         plt.style.use(['plot_style.txt'])
 
-        figure, axes = plt.subplots(3, 1)
+        figure, axes = plt.subplots(3, 1, sharex=True)
         self.wt.estimate_strat = estimate_strat
         self.wt.reserve_strat = reserve_strat
+        self.wt.O_version = O_version
 
         # Plot strategic values & estimateSmartFee history
         rows = []
         fees_paid_rows = []
+        Os = []
         for block in range(start_block, end_block):
             if block % 1000 == 0:
                 print(f"Processing block {block}")
-            datetime = self.wt._get_block_datetime(block)
-            rows.append([datetime, self.wt.Vm(block), self.wt.Vb(
-                block), self.wt.fee_reserve_per_vault(block)])
-            fees_paid_rows.append([datetime, self.wt._feerate(block)])
+                Os.append([block, self.wt.O(block)])
+            rows.append([block, self.wt.Vm(block), self.wt.fee_reserve_per_vault(block)])
 
         strategy_df = DataFrame(
-            rows, columns=['DateTime', 'Vm', 'Vb', 'Required Reserve'])
-        strategy_df.set_index('DateTime', inplace=True)
+            rows, columns=['Block', 'Vm', 'Required Reserve'])
+        strategy_df.set_index('Block', inplace=True)
         strategy_df['Vm'].plot(ax=axes[0], title='Vm', legend=True)
-        strategy_df['Vb'].plot(ax=axes[0], title='Vb', legend=True)
         strategy_df['Required Reserve'].plot(
             ax=axes[0], title='Required Reserve', legend=True)
         axes[0].set_ylabel("Sats")
-        axes[0].set_title(f"Strategic Values (estimate_strat = {estimate_strat}, reserve_strat = {reserve_strat})")
+        axes[0].set_title(f"Strategic Values\nestimate_strat = {estimate_strat}\nreserve_strat = {reserve_strat})", pad=15)
 
         # Plot fee history
-        start = self.wt.feerate_df.index.get_loc(
-            key=self.wt._get_block_datetime(start_block), method="ffill")
-        end = self.wt.feerate_df.index.get_loc(
-            key=self.wt._get_block_datetime(end_block), method="ffill")
-        self.wt.feerate_df['FeeRate'][start:end].plot(ax=axes[1])
+        self.wt.feerate_df['MeanFeerate'][start_block:end_block].plot(ax=axes[1])
         axes[1].set_ylabel("Feerate (sats/vByte)")
         axes[1].set_title("Historic Feerates")
 
-        # Plot estimateSmartFee history against block data based A
-        fee_df = DataFrame(fees_paid_rows, columns=['DateTime', 'Fee'])
-        fee_df.set_index('DateTime', inplace=True)
-        fee_df['Fee'].plot(ax=axes[2], title="Fees Paid", legend=False)
+        # Plot amounts of O(t)
+        for frame in Os:
+            tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
+            Os_df = DataFrame(tuples, columns=['block', 'amount'])
+            Os_df.plot.scatter(x='block', y='amount', style='-',
+                                 alpha=1, s=10, ax=axes[2], legend=False)
+            axes[2].set_title("O")
+            axes[2].set_ylabel("Coin Amount (Satoshis)", labelpad=15)
+            axes[2].set_xlabel("Block", labelpad=15)
 
-        axes[2].set_ylabel("FeeRate estimate (sats/vByte)")
-        axes[2].set_title(f"{self.wt.estimate_strat} of actual fees paid")
-
-        plt.show()
+        plt.savefig("Results/StrategicValues.png")
+        # plt.show()
 
 
 if __name__ == '__main__':
     # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
     config = {
         "n_stk": 7, "n_man": 3, "reserve_strat": "CUMMAX95Q90", "estimate_strat": "ME30",
-        "O_version": 0, "I_version": 2, "feerate_src": "../block_fees/historical_fees.csv", 
+        "O_version": 1, "I_version": 2, "feerate_src": "../block_fees/historical_fees.csv", 
         "estimate_smart_feerate_src": "fee_estimates_fine.csv", "weights_src": "tx_weights.csv",
         "block_datetime_src": "block_height_datetime.csv"
     }
@@ -610,6 +613,4 @@ if __name__ == '__main__':
     subplots = ["balance", "operations", "cumulative_ops"]
     sim.plot_simulation(start_block, end_block, subplots)
 
-    # sim.plot_strategic_values(start_block, end_block, "ME30", "CUMMAX95Q90")
-
-    # sim.plot_cf_cost_per_refill_amount(start_block, end_block, 1, 5)
+    # sim.plot_strategic_values(start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1)
