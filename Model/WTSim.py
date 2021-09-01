@@ -9,8 +9,9 @@ class WTSim(object):
 
     def __init__(self, config, fname):
         # Stakeholder parameters
-        self.REFILL_EXCESS = 10
-        self.EXPECTED_ACTIVE_VAULTS = 5
+        self.EXPECTED_ACTIVE_VAULTS = 10 # Units: fee reserve per vault
+        # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
+        self.REFILL_EXCESS = 2*self.EXPECTED_ACTIVE_VAULTS
         self.REFILL_PERIOD = 144*7
         self.DELEGATION_PERIOD = 144
 
@@ -24,7 +25,8 @@ class WTSim(object):
 
         # Simulation report
         self.fname = fname
-        self.report_init = f"Watchtower config:\n{config}\nRefill excess: {self.REFILL_EXCESS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nRefill period: {self.REFILL_PERIOD}\nDelegation period: {self.DELEGATION_PERIOD}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
+        self.report_init = f"Watchtower config:\n{config}O_0_factor: {self.wt.O_0_factor}\nO_1_factor: {self.wt.O_1_factor}\nRefill excess: {self.REFILL_EXCESS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nRefill period: {self.REFILL_PERIOD}\nDelegation period: {self.DELEGATION_PERIOD}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
+
 
     def required_reserve(self, block_height):
         """The amount the WT should have in reserve based on the number of active vaults
@@ -43,7 +45,7 @@ class WTSim(object):
         """
         bal = self.wt.balance()
         frpv = self.wt.fee_reserve_per_vault(block_height)
-        reserve_total = frpv*(self.EXPECTED_ACTIVE_VAULTS+self.REFILL_EXCESS)
+        reserve_total = frpv*(self.EXPECTED_ACTIVE_VAULTS+self.REFILL_EXCESS) # Should really be len(self.wt.vaults) not EXPECTED_ACTIVE_VAULTS but then initialise sequence wouldn't work
         R = (reserve_total - bal)
         if R <= 0:
             return 0
@@ -312,10 +314,11 @@ class WTSim(object):
             try:
                 # Refill sequence spans 8 blocks, musn't begin another sequence 
                 # with period shorter than that.
-                if block % self.REFILL_PERIOD == 0: # once per day
+                if block % self.REFILL_PERIOD == 0: # once per refill period
                     self.refill_sequence(block)
 
-                if block % self.DELEGATION_PERIOD == 20: # once per day on the 20th block
+                # Fixme: assumes self.DELEGATION_PERIOD > 20
+                if block % self.DELEGATION_PERIOD == 20: # once per delegation period on the 20th block
                     # generate invalid spend, requires cancel
                     if random() < self.INVALID_SPEND_RATE:
                         self.cancel_sequence(block)
@@ -444,6 +447,9 @@ class WTSim(object):
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
+            report += f"Total cumulative cancel fee cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
+            report += f"Total cumulative consolidate-fanout fee cost: {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
+            report += f"Total cumulative refill fee cost: {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
 
         # Plot coin pool amounts vs block
         if "coin_pool" in subplots:
@@ -486,26 +492,49 @@ class WTSim(object):
             plot_num += 1
 
         if "vault_excesses" in subplots:
+            ## AS SCATTER
+            # for frame in self.vault_excess_after_cf:
+            #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
+            #     excesses_df = DataFrame(tuples, columns=['block', 'amount'])
+            #     # , label="After CF")
+            #     excesses_df.plot.scatter(
+            #         x='block', y='amount', color='r', ax=axes[plot_num])
+            # for frame in self.vault_excess_after_delegation:
+            #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
+            #     excesses_df = DataFrame(tuples, columns=['block', 'amount'])
+            #     # , label="After Delegation")
+            #     excesses_df.plot.scatter(
+            #         x='block', y='amount', color='g', ax=axes[plot_num])
+            # for frame in self.vault_excess_before_cf:
+            #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
+            #     excesses_df = DataFrame(tuples, columns=['block', 'amount'])
+            #     excesses_df.plot.scatter(
+            #         x='block', y='amount', color='b', ax=axes[plot_num])
+            # axes[plot_num].set_ylabel("Vault Excess (Satoshis)", labelpad=15)
+            # axes[plot_num].set_xlabel("Block", labelpad=15)
+            # plot_num += 1
+
+            ## Normalised sum of vault excesses
+            # excesses_df = DataFrame(columns=['block', 'amount'])
+            vault_excess_after_cf = []
             for frame in self.vault_excess_after_cf:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                excesses_df = DataFrame(tuples, columns=['block', 'amount'])
-                # , label="After CF")
-                excesses_df.plot.scatter(
-                    x='block', y='amount', color='r', ax=axes[plot_num])
+                vault_excess_after_cf.append((frame[0], sum(frame[1])/self.EXPECTED_ACTIVE_VAULTS))
+            excesses_df = DataFrame(vault_excess_after_cf, columns=['block','After CF'])
+            excesses_df.plot.scatter(x='block', y='After CF', ax=axes[plot_num], color='r', label='After CF')
+            vault_excess_after_delegation = []
             for frame in self.vault_excess_after_delegation:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                excesses_df = DataFrame(tuples, columns=['block', 'amount'])
-                # , label="After Delegation")
-                excesses_df.plot.scatter(
-                    x='block', y='amount', color='g', ax=axes[plot_num])
+                vault_excess_after_delegation.append((frame[0],sum(frame[1])/self.EXPECTED_ACTIVE_VAULTS))
+            excesses_df = DataFrame(vault_excess_after_delegation, columns=['block','After delegation'])
+            excesses_df.plot.scatter(x='block', y='After delegation', ax=axes[plot_num], color='g', label='After delegation')
+            vault_excess_before_cf = []
             for frame in self.vault_excess_before_cf:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                excesses_df = DataFrame(tuples, columns=['block', 'amount'])
-                excesses_df.plot.scatter(
-                    x='block', y='amount', color='b', ax=axes[plot_num])
-            axes[plot_num].set_ylabel("Vault Excess (Satoshis)", labelpad=15)
+                vault_excess_before_cf.append((frame[0],sum(frame[1])/self.EXPECTED_ACTIVE_VAULTS))
+            excesses_df = DataFrame(vault_excess_before_cf, columns=['block','Before CF'])
+            excesses_df.plot.scatter(x='block', y='Before CF', ax=axes[plot_num], color='b', label='Before CF')
+            axes[plot_num].set_ylabel("Mean Excess per Vault (Satoshis)", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
+
 
         # Plot WT risk status
         if "risk_status" in subplots:
@@ -609,8 +638,8 @@ if __name__ == '__main__':
     start_block = 200000 
     end_block = 681000
 
-    # "overpayments", "vault_excesses", "coin_pool_age", "coin_pool", "risk_status"]
-    subplots = ["balance", "operations", "cumulative_ops"]
-    sim.plot_simulation(start_block, end_block, subplots)
+    # "overpayments", "operations", "coin_pool_age", "coin_pool", "risk_status"]
+    subplots = ["balance", "vault_excesses", "cumulative_ops"]
+    sim.plot_simulation(start_block, end_block, subplots)  
 
     # sim.plot_strategic_values(start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1)

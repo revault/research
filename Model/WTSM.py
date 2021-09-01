@@ -56,6 +56,9 @@ class WTSM():
         self.O_0_factor = 7 # num of Vb coins
         self.O_1_factor = 1.75 # multiplier M
 
+        # avoid unnecessary search by caching fee reserve per vault
+        self.frpv = (None,None) # block, value
+
     def _get_block_datetime(self, block_num):
         """Return datetime associated with given block number."""
         return self.block_datetime_df['DateTime'][block_num]
@@ -94,22 +97,27 @@ class WTSM():
            statistical analysis of historical feerates, using one of the implemented strategies
            chosen with the self.reserve_strat parameter. 
         """
-        thirtyD = 144*30 # 30 days in blocks
-        ninetyD = 144*90 # 90 days in blocks
-        if self.reserve_strat not in self.feerate_df:
-            if self.reserve_strat == '95Q30':
-                self.feerate_df['95Q30'] = self.feerate_df['MeanFeerate'].rolling(thirtyD, min_periods=144).quantile(
-                    quantile=0.95, interpolation='linear')
-            elif self.reserve_strat == '95Q90':
-                self.feerate_df['95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
-                    quantile=0.95, interpolation='linear')
-            elif self.reserve_strat == 'CUMMAX95Q90':
-                self.feerate_df['CUMMAX95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
-                    quantile=0.95, interpolation='linear').cummax()
-            else:
-                raise ValueError("Strategy not implemented")
+        if self.frpv[0] == block_height:
+            return self.frpv[1]
+            
+        else:    
+            thirtyD = 144*30 # 30 days in blocks
+            ninetyD = 144*90 # 90 days in blocks
+            if self.reserve_strat not in self.feerate_df:
+                if self.reserve_strat == '95Q30':
+                    self.feerate_df['95Q30'] = self.feerate_df['MeanFeerate'].rolling(thirtyD, min_periods=144).quantile(
+                        quantile=0.95, interpolation='linear')
+                elif self.reserve_strat == '95Q90':
+                    self.feerate_df['95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
+                        quantile=0.95, interpolation='linear')
+                elif self.reserve_strat == 'CUMMAX95Q90':
+                    self.feerate_df['CUMMAX95Q90'] = self.feerate_df['MeanFeerate'].rolling(ninetyD, min_periods=144).quantile(
+                        quantile=0.95, interpolation='linear').cummax()
+                else:
+                    raise ValueError("Strategy not implemented")
 
-        return self.feerate_df[self.reserve_strat][block_height]
+            self.frpv = (block_height, self.feerate_df[self.reserve_strat][block_height])
+            return self.frpv[1]
 
     def _feerate(self, block_height):
         """Return a current feerate estimate (satoshi/vbyte). The value is determined from a
@@ -158,8 +166,8 @@ class WTSM():
         feerate = self._feerate(block_height)
         Vm = self._feerate_to_fee(
             feerate, 'cancel', 0) + feerate*(272.0/4)
-        if Vm < 0:
-            raise ValueError(f"Vm = {Vm} for block {block_height}. Shouldn't be negative.")
+        if Vm <= 0:
+            raise ValueError(f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive.")
         return Vm
 
     def Vb(self, block_height):
