@@ -1,0 +1,54 @@
+xtick.color: 323034
+ytick.color: 323034
+text.color: 323034
+lines.markeredgecolor: black
+patch.facecolor        : bc80bd
+patch.force_edgecolor  : True
+patch.linewidth: 0.8
+scatter.edgecolors: black
+grid.color: b1afb5
+axes.titlesize: 16
+legend.title_fontsize: 12
+xtick.labelsize: 12
+ytick.labelsize: 12
+axes.labelsize: 12
+font.size: 10
+# mathtext.fontset: stix
+# font.family: STIXGeneral
+lines.linewidth: 2
+legend.frameon: True
+legend.framealpha: 0.7
+legend.fontsize: 10
+legend.edgecolor: 0.9
+legend.borderpad: 0.2
+legend.columnspacing: 1.5
+legend.labelspacing:  0.4
+text.usetex: False
+axes.titlelocation: center
+axes.formatter.use_mathtext: True
+#axes.formatter.useoffset: False
+axes.formatter.limits: -5, 5
+#axes.formatter.min_exponent: 8
+axes.formatter.offset_threshold: 18
+#axes.autolimit_mode: round_numbers
+axes.labelpad: 3
+axes.labelcolor: black
+axes.edgecolor: black
+axes.linewidth: 0.6
+axes.spines.right : False
+axes.spines.top : False
+axes.grid: True
+figure.titlesize: 18
+figure.figsize: 5.3, 15.6 # 3.9 height per sub plot
+
+savefig.dpi: 150      # figure dots per inch or 'figure'
+savefig.facecolor: w        # figure face color when saving
+savefig.edgecolor: w        # figure edge color when saving
+savefig.format:    png         # {png, ps, pdf, svg}
+savefig.bbox:      tight    # {tight, standard}
+
+savefig.pad_inches:   0.1      # Padding to be used when bbox is set to 'tight'
+#savefig.directory:    ~        # default directory in savefig dialog box,
+#savefig.transparent: False     # setting that controls whether figures are saved with a
+                                # transparent background by default
+savefig.orientation: portrait  # Orientation of saved figure
