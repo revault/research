@@ -471,7 +471,7 @@ class Simulation(object):
         plot_num = 0
 
         # Plot WT balance vs total required reserve
-        if self.with_balance:
+        if self.with_balance and self.balances != []:
             bal_df = DataFrame(
                 self.balances, columns=["block", "balance", "required reserve"]
             )
@@ -481,13 +481,15 @@ class Simulation(object):
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             plot_num += 1
 
-        costs_df = DataFrame(
-            self.costs, columns=["block", "Refill Fee", "CF Fee", "Cancel Fee"]
-        )
-        report += f"Refill operations: {costs_df['Refill Fee'].count()}\n"
+        costs_df = None
+        if self.costs != []:
+            costs_df = DataFrame(
+                self.costs, columns=["block", "Refill Fee", "CF Fee", "Cancel Fee"]
+            )
+            report += f"Refill operations: {costs_df['Refill Fee'].count()}\n"
 
         # Plot refill amount vs block, operating expense vs block
-        if self.with_op_cost:
+        if self.with_op_cost and costs_df is not None:
             costs_df.plot.scatter(
                 x="block",
                 y="Refill Fee",
@@ -515,7 +517,7 @@ class Simulation(object):
             plot_num += 1
 
         # Plot cumulative operating costs (CF, Cancel, Spend)
-        if self.with_cum_op_cost:
+        if self.with_cum_op_cost and costs_df is not None and self.wt_risk_time != []:
             cumulative_costs_df = costs_df
             cumulative_costs_df.set_index(["block"], inplace=True)
             cumulative_costs_df = cumulative_costs_df.fillna(0).cumsum()
@@ -554,7 +556,14 @@ class Simulation(object):
             plot_num += 1
 
         # Plot coin pool amounts vs block
-        if self.with_coin_pool:
+        if (
+            self.with_coin_pool
+            and self.pool_after_refill != []
+            and self.pool_after_cf != []
+            and self.pool_after_spend != []
+            and self.pool_after_cancel != []
+            and self.pool_after_catastrophe != []
+        ):
             for frame in self.pool_after_refill:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 pool_df = DataFrame(tuples, columns=["block", "amount"])
@@ -629,7 +638,12 @@ class Simulation(object):
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
-        if self.with_vault_excess:
+        if (
+            self.with_vault_excess
+            and self.vault_excess_before_cf != []
+            and self.vault_excess_after_cf != []
+            and self.vault_excess_after_delegation != []
+        ):
             # AS SCATTER
             # for frame in self.vault_excess_after_cf:
             #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
@@ -722,7 +736,7 @@ class Simulation(object):
             plot_num += 1
 
         # Plot overpayments
-        if self.with_overpayments:
+        if self.with_overpayments and self.overpayments != []:
             df = DataFrame(self.overpayments, columns=["block", "overpayments"])
             df["cumulative"] = df["overpayments"].cumsum()
             df.set_index(["block"], inplace=True)
@@ -737,7 +751,7 @@ class Simulation(object):
             plot_num += 1
 
         # Plot coin pool age
-        if self.with_coin_pool_age:
+        if self.with_coin_pool_age and self.coin_pool_age != []:
             age_df = DataFrame(self.coin_pool_age, columns=["block", "age"])
             age_df.plot.scatter(
                 x="block",
