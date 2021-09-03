@@ -4,22 +4,18 @@ TODO:
 * Use integers for all values with units in satoshis
 * Add random time interval between balance low & re-fill trigger (to simulate slow stakeholder),
   to investigate time-at-risk. 
-* Consider ordering of outputs in fee generator for CF Tx
 * Make good documentation
-* Remove possibility for inconsistencies in progress of blocks with WTSim
-
-Plotting:
-* plot the amount wasted by overpaying fees due to inadequate availability of coins
-* plot O and FeeRate
+* Remove possibility for inconsistencies in progress of blocks with WTSim   
+    - could break with certain DELEGATION_PERIODs. 
 """
 
 import hashlib
 import time
-from random import randint, random, choice
 from pandas import read_csv, DataFrame, option_context, Timedelta, to_datetime
 from matplotlib import pyplot as plt
 import numpy as np
 
+MAX_TX_SIZE = 100000  # vBytes
 
 class WTSM():
     """Watchtower state machine."""
@@ -54,7 +50,7 @@ class WTSM():
         self.I_version = config['I_version']
 
         self.O_0_factor = 7 # num of Vb coins
-        self.O_1_factor = 1.75 # multiplier M
+        self.O_1_factor = 2 # multiplier M
 
         # avoid unnecessary search by caching fee reserve per vault
         self.frpv = (None,None) # block, value
@@ -99,7 +95,7 @@ class WTSM():
         """
         if self.frpv[0] == block_height:
             return self.frpv[1]
-            
+
         else:    
             thirtyD = 144*30 # 30 days in blocks
             ninetyD = 144*90 # 90 days in blocks
@@ -485,8 +481,11 @@ class WTSM():
 
             # note: cf_tx_fee used above to track how much each output contributed to the required fee,
             # so it is recomputed here to return the actual fee paid
-            cf_tx_fee = (10.75 + num_outputs*P2WPKH_OUTPUT_vBytes +
-                         num_inputs*P2WPKH_INPUT_vBytes)*feerate
+            cf_size = (10.75 + num_outputs*P2WPKH_OUTPUT_vBytes +
+                         num_inputs*P2WPKH_INPUT_vBytes)
+            if cf_size > MAX_TX_SIZE:
+                raise(RuntimeError(f"The consolidate_fanout transactino is too large! Please be smarter when constructing it."))
+            cf_tx_fee = cf_size*feerate
             return cf_tx_fee
 
     def allocate(self, vaultID, amount, block_height):

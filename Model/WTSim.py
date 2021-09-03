@@ -1,4 +1,7 @@
 from WTSM import *
+import random 
+
+random.seed(21000000)
 
 class AllocationError(Exception):
     pass
@@ -9,9 +12,9 @@ class WTSim(object):
 
     def __init__(self, config, fname):
         # Stakeholder parameters
-        self.EXPECTED_ACTIVE_VAULTS = 10 # Units: fee reserve per vault
+        self.EXPECTED_ACTIVE_VAULTS = 5 # Units: fee reserve per vault
         # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
-        self.REFILL_EXCESS = 2*self.EXPECTED_ACTIVE_VAULTS
+        self.REFILL_EXCESS = 3*self.EXPECTED_ACTIVE_VAULTS
         self.REFILL_PERIOD = 144*7
         self.DELEGATION_PERIOD = 144
 
@@ -212,7 +215,7 @@ class WTSim(object):
             self.vault_excess_after_delegation.append([block_height, excesses])
 
         # choose a random vault to spend
-        vaultID = choice(self.wt.vaults)['id']
+        vaultID = random.choice(self.wt.vaults)['id']
 
         return vaultID
 
@@ -320,7 +323,7 @@ class WTSim(object):
                 # Fixme: assumes self.DELEGATION_PERIOD > 20
                 if block % self.DELEGATION_PERIOD == 20: # once per delegation period on the 20th block
                     # generate invalid spend, requires cancel
-                    if random() < self.INVALID_SPEND_RATE:
+                    if random.random() < self.INVALID_SPEND_RATE:
                         self.cancel_sequence(block)
 
                     # generate valid spend, requires processing
@@ -328,7 +331,7 @@ class WTSim(object):
                         self.spend_sequence(block)
 
                 if block % 144 == 70: #once per day on the 70th block
-                    if random() < self.CATASTROPHE_RATE:
+                    if random.random() < self.CATASTROPHE_RATE:
                         self.catastrophe_sequence(block)
 
                         # Reboot operation after catastrophe
@@ -359,7 +362,7 @@ class WTSim(object):
                 except:
                     pass  # If processed is empty, error raised
 
-            if "operations" in subplots:
+            if "cumulative_ops" in subplots:
                 # Check if wt becomes risky
                 if switch == "good":
                     for vault in self.wt.vaults:
@@ -412,6 +415,23 @@ class WTSim(object):
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
 
+            plot_num += 1
+
+        # Plot cumulative operating costs (CF, Cancel, Spend)
+        if "cumulative_ops" in subplots:
+            cumulative_costs_df = costs_df
+            cumulative_costs_df.set_index(['block'], inplace=True)
+            cumulative_costs_df = cumulative_costs_df.fillna(0).cumsum()
+            cumulative_costs_df.plot.line(ax=axes[plot_num], color={
+                                          'Refill Fee': 'r', 'CF Fee': 'g', 'Cancel Fee': 'b'})
+            axes[plot_num].legend(loc='upper left')
+            axes[plot_num].set_title("Cumulative Operating Costs")
+            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
+            axes[plot_num].set_xlabel("Block", labelpad=15)
+            report += f"Total cumulative cancel fee cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
+            report += f"Total cumulative consolidate-fanout fee cost: {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
+            report += f"Total cumulative refill fee cost: {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
+
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve
             for (risk_on, risk_off) in wt_risk_time:
@@ -435,21 +455,6 @@ class WTSim(object):
 
             plot_num += 1
 
-        # Plot cumulative operating costs (CF, Cancel, Spend)
-        if "cumulative_ops" in subplots:
-            cumulative_costs_df = costs_df
-            cumulative_costs_df.set_index(['block'], inplace=True)
-            cumulative_costs_df = cumulative_costs_df.fillna(0).cumsum()
-            cumulative_costs_df.plot.line(ax=axes[plot_num], color={
-                                          'Refill Fee': 'r', 'CF Fee': 'g', 'Cancel Fee': 'b'})
-            axes[plot_num].legend(loc='upper left')
-            axes[plot_num].set_title("Cumulative Operating Costs")
-            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
-            axes[plot_num].set_xlabel("Block", labelpad=15)
-            plot_num += 1
-            report += f"Total cumulative cancel fee cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
-            report += f"Total cumulative consolidate-fanout fee cost: {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
-            report += f"Total cumulative refill fee cost: {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
 
         # Plot coin pool amounts vs block
         if "coin_pool" in subplots:
@@ -638,8 +643,8 @@ if __name__ == '__main__':
     start_block = 200000 
     end_block = 681000
 
-    # "overpayments", "operations", "coin_pool_age", "coin_pool", "risk_status"]
-    subplots = ["balance", "vault_excesses", "cumulative_ops"]
+    # "operations", "coin_pool_age", "coin_pool", "risk_status"
+    subplots = ["balance", "vault_excesses", "cumulative_ops", "overpayments"]
     sim.plot_simulation(start_block, end_block, subplots)  
 
-    # sim.plot_strategic_values(start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1)
+    sim.plot_strategic_values(start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1)
