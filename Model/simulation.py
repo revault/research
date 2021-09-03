@@ -29,6 +29,7 @@ class Simulation(object):
 
         # WT state machine
         self.wt = StateMachine(config)
+        self.vault_count = 0
         self.vault_id = 0
 
         # Simulation report
@@ -330,7 +331,6 @@ class Simulation(object):
         plt.style.use(["plot_style.txt"])
 
         self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
-        self.vault_count = 1
 
         self.subplots = subplots
         self.pool_after_refill = []
