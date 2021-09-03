@@ -1,3 +1,4 @@
+import logging
 import random
 
 from matplotlib import pyplot as plt
@@ -86,14 +87,14 @@ class WTSim(object):
         return R
 
     def initialize_sequence(self, block_height):
-        print(f"Initialize sequence at block {block_height}")
+        logging.debug(f"Initialize sequence at block {block_height}")
         # Refill transition
         refill_amount = self.amount_needed(block_height)
         if refill_amount <= 0:
-            print(f"  Refill not required, WT has enough bitcoin")
+            logging.debug(f"  Refill not required, WT has enough bitcoin")
         else:
             self.wt.refill(refill_amount)
-            print(f"  Refill transition at block {block_height} by {refill_amount}")
+            logging.debug(f"  Refill transition at block {block_height} by {refill_amount}")
 
             # Track operational costs
             try:
@@ -121,7 +122,7 @@ class WTSim(object):
 
             ## Consolidate-fanout transition
             self.cf_fee = self.wt.consolidate_fanout(block_height)
-            print(
+            logging.debug(
                 f"  Consolidate-fanout transition at block {block_height} with fee: {self.cf_fee}"
             )
 
@@ -153,9 +154,9 @@ class WTSim(object):
     def refill_sequence(self, block_height):
         refill_amount = self.amount_needed(block_height)
         if refill_amount > 0:
-            print(f"Refill sequence at block {block_height}")
+            logging.debug(f"Refill sequence at block {block_height}")
             # Refill transition
-            print(f"  Refill transition at block {block_height} by {refill_amount}")
+            logging.debug(f"  Refill transition at block {block_height} by {refill_amount}")
             self.wt.refill(refill_amount)
 
             try:
@@ -184,7 +185,7 @@ class WTSim(object):
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
             self.cf_fee = self.wt.consolidate_fanout(block_height + 1)
-            print(
+            logging.debug(
                 f"  Consolidate-fanout transition at block {block_height+1} with fee: {self.cf_fee}"
             )
 
@@ -253,14 +254,14 @@ class WTSim(object):
                 ## Allocation transition
                 self.wt.allocate(vault["id"], vault["amount"], block_height)
             except (RuntimeError):
-                print(f"  Allocation transition FAILED for vault {vault['id']}")
+                logging.debug(f"  Allocation transition FAILED for vault {vault['id']}")
                 raise (AllocationError())
 
     def spend_sequence(self, block_height):
-        print(f"Spend sequence at block {block_height}")
+        logging.debug(f"Spend sequence at block {block_height}")
         vaultID = self._spend_init(block_height)
         # Spend transition
-        print(f"  Spend transition at block {block_height}")
+        logging.debug(f"  Spend transition at block {block_height}")
         self.wt.process_spend(vaultID)
 
         # snapshot coin pool after spend attempt
@@ -269,13 +270,13 @@ class WTSim(object):
             self.pool_after_spend.append([block_height, amounts])
 
     def cancel_sequence(self, block_height):
-        print(f"Cancel sequence at block {block_height}")
+        logging.debug(f"Cancel sequence at block {block_height}")
         vaultID = self._spend_init(block_height)
         # Cancel transition
         cancel_inputs = self.wt.process_cancel(vaultID, block_height)
         self.wt.finalize_cancel(vaultID)
         self.cancel_fee = sum(coin["amount"] for coin in cancel_inputs)
-        print(f"  Cancel transition with vault {vaultID} for fee: {self.cancel_fee}")
+        logging.debug(f"  Cancel transition with vault {vaultID} for fee: {self.cancel_fee}")
 
         # snapshot coin pool after cancel
         if "coin_pool" in self.subplots:
@@ -291,7 +292,7 @@ class WTSim(object):
             self.overpayments.append([block_height, self.cancel_fee - feerate])
 
     def catastrophe_sequence(self, block_height):
-        print(f"Catastrophe sequence at block {block_height}")
+        logging.debug(f"Catastrophe sequence at block {block_height}")
         for vault in self.wt.vaults:
             # Cancel transition
             cancel_inputs = self.wt.process_cancel(vault["id"], block_height)
@@ -305,7 +306,7 @@ class WTSim(object):
             except (TypeError):
                 cancel_fee = sum(coin["amount"] for coin in cancel_inputs)
                 self.cancel_fee = cancel_fee
-            print(f"  Cancel transition with vault {vault['id']} for fee: {cancel_fee}")
+            logging.debug(f"  Cancel transition with vault {vault['id']} for fee: {cancel_fee}")
 
         # snapshot coin pool after all spend attempts are cancelled
         if "coin_pool" in self.subplots:
@@ -367,7 +368,7 @@ class WTSim(object):
                         self.initialize_sequence(block + 10)
             # Stop simulation, exit loop and report results
             except (AllocationError):
-                print(f"Allocation error at block {block}")
+                logging.debug(f"Allocation error at block {block}")
                 break
 
             if "balance" in subplots:
@@ -720,7 +721,7 @@ class WTSim(object):
         Os = []
         for block in range(start_block, end_block):
             if block % 1000 == 0:
-                print(f"Processing block {block}")
+                logging.debug(f"Processing block {block}")
                 Os.append([block, self.wt.fb_coins_dist(block)])
             rows.append(
                 [block, self.wt.Vm(block), self.wt.fee_reserve_per_vault(block)]
@@ -766,7 +767,10 @@ class WTSim(object):
 
 if __name__ == "__main__":
     random.seed(21000000)
+    # FIXME: make it configurable through command line
+    logging.basicConfig(level=logging.DEBUG)
 
+    # FIXME: make it configurable through command line
     # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
     config = {
         "n_stk": 7,

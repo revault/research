@@ -10,6 +10,7 @@ TODO:
 """
 
 import hashlib
+import logging
 import numpy as np
 import time
 
@@ -435,7 +436,7 @@ class WTSM:
         num_new_reserves = total_to_consume // (sum(fb_coins))
 
         if num_new_reserves == 0:
-            print(
+            logging.debug(
                 "        CF Tx failed sice num_new_reserves = 0 (not accounting for expected fee)"
             )
             # Not enough in available coins to fanout to 1 complete fee_reserve, so return
@@ -478,7 +479,7 @@ class WTSM:
             return cf_tx_fee
         else:
             if num_new_reserves == 1:
-                print(
+                logging.debug(
                     f"        CF Tx failed sice num_new_reserves = 0 (accounting for expected fee)"
                 )
                 # Not enough in available coins to fanout to 1 complete fee_reserve, when accounting
@@ -572,14 +573,14 @@ class WTSM:
             if self.under_requirement(vault["fee_reserve"], block_height) == 0:
                 return
             else:
-                print(
+                logging.debug(
                     f"  Allocation transition to an existing vault {vaultID} at block {block_height}"
                 )
                 for coin in vault["fee_reserve"]:
                     coin["allocation"] = None
                 self.vaults.remove(vault)
         except (StopIteration):
-            print(
+            logging.debug(
                 f"  Allocation transition to new vault {vaultID} at block {block_height}"
             )
 
@@ -596,7 +597,7 @@ class WTSM:
         required_reserve = self.fee_reserve_per_vault(block_height)
 
         Vm = self.Vm(block_height)
-        print(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
+        logging.debug(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
         if int(required_reserve) > int(total_unallocated):
             self.fbcoins = fbcoins_copy
             self.vaults = vaults_copy
@@ -629,13 +630,13 @@ class WTSM:
                             )
                             fee_reserve.append(fbcoin)
                             search_Vm = False
-                            print(
+                            logging.debug(
                                 f"    Vm = {fbcoin['amount']} coin found with tolerance {tol*100}%, added to fee reserve"
                             )
                             break
                         except (StopIteration):
                             if tol == tolerances[-1]:
-                                print(
+                                logging.debug(
                                     f"    No coin found for Vm = {Vm} with tolerance {tol*100}%"
                                 )
                                 search_Vm = False
@@ -668,13 +669,13 @@ class WTSM:
                             }
                         )
                         fee_reserve.append(fbcoin)
-                        print(
+                        logging.debug(
                             f"    Coin of size {fbcoin['amount']} added to the fee reserve"
                         )
                         break
                     except (StopIteration):
                         if tol == tolerances[::-1][-1]:
-                            print(
+                            logging.debug(
                                 f"    No coin found with size other than Vm = {Vm} with tolerance {tol*100}%"
                             )
 
@@ -686,7 +687,7 @@ class WTSM:
                     for coin in available
                 )
                 if all_Vm:
-                    print(f"    All coins found were Vm-sized at block {block_height}")
+                    logging.debug(f"    All coins found were Vm-sized at block {block_height}")
                     fbcoin = next(coin for coin in available)
                     fbcoin.update(
                         {
@@ -700,7 +701,7 @@ class WTSM:
 
             new_reserve_total = sum([coin["amount"] for coin in fee_reserve])
             assert new_reserve_total >= required_reserve
-            print(
+            logging.debug(
                 f"    Reserve for vault {vaultID} has excess of {new_reserve_total-required_reserve}"
             )
 
