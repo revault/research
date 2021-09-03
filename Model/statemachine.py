@@ -16,7 +16,7 @@ from pandas import read_csv
 from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, MAX_TX_SIZE
 
 
-class WTSM:
+class StateMachine:
     """Watchtower state machine."""
 
     def __init__(self, config):
@@ -684,7 +684,9 @@ class WTSM:
                     for coin in available
                 )
                 if all_Vm:
-                    logging.debug(f"    All coins found were Vm-sized at block {block_height}")
+                    logging.debug(
+                        f"    All coins found were Vm-sized at block {block_height}"
+                    )
                     fbcoin = next(coin for coin in available)
                     fbcoin.update(
                         {

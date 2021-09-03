@@ -5,14 +5,14 @@ from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
 from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
-from WTSM import WTSM
+from statemachine import StateMachine
 
 
 class AllocationError(Exception):
     pass
 
 
-class WTSim(object):
+class Simulation(object):
     """Simulator for fee-reserve management of a Revault Watchtower."""
 
     def __init__(self, config, fname):
@@ -28,7 +28,7 @@ class WTSim(object):
         self.CATASTROPHE_RATE = 0.005
 
         # WT state machine
-        self.wt = WTSM(config)
+        self.wt = StateMachine(config)
         self.vault_id = 0
 
         # Simulation report
@@ -81,7 +81,9 @@ class WTSim(object):
         except (ValueError, KeyError):
             feerate = self.wt._feerate(block_height)
         expected_num_outputs = len(self.wt.fb_coins_dist(block_height)) * new_reserves
-        expected_num_inputs = len(self.wt.fb_coins_dist(block_height)) * len(self.wt.vaults)
+        expected_num_inputs = len(self.wt.fb_coins_dist(block_height)) * len(
+            self.wt.vaults
+        )
         expected_cf_fee = (
             TX_OVERHEAD_SIZE
             + expected_num_outputs * P2WPKH_OUTPUT_SIZE
@@ -99,7 +101,9 @@ class WTSim(object):
             logging.debug(f"  Refill not required, WT has enough bitcoin")
         else:
             self.wt.refill(refill_amount)
-            logging.debug(f"  Refill transition at block {block_height} by {refill_amount}")
+            logging.debug(
+                f"  Refill transition at block {block_height} by {refill_amount}"
+            )
 
             # Track operational costs
             try:
@@ -160,7 +164,9 @@ class WTSim(object):
         if refill_amount > 0:
             logging.debug(f"Refill sequence at block {block_height}")
             # Refill transition
-            logging.debug(f"  Refill transition at block {block_height} by {refill_amount}")
+            logging.debug(
+                f"  Refill transition at block {block_height} by {refill_amount}"
+            )
             self.wt.refill(refill_amount)
 
             try:
@@ -278,7 +284,9 @@ class WTSim(object):
         cancel_inputs = self.wt.process_cancel(vaultID, block_height)
         self.wt.finalize_cancel(vaultID)
         self.cancel_fee = sum(coin["amount"] for coin in cancel_inputs)
-        logging.debug(f"  Cancel transition with vault {vaultID} for fee: {self.cancel_fee}")
+        logging.debug(
+            f"  Cancel transition with vault {vaultID} for fee: {self.cancel_fee}"
+        )
 
         # snapshot coin pool after cancel
         if "coin_pool" in self.subplots:
@@ -286,7 +294,7 @@ class WTSim(object):
             self.pool_after_cancel.append([block_height, amounts])
 
         # Compute overpayments
-        if "overpayments" in subplots:
+        if "overpayments" in self.subplots:
             try:
                 feerate = self.wt._estimate_smart_feerate(block_height)
             except (ValueError, KeyError):
@@ -308,7 +316,9 @@ class WTSim(object):
             except (TypeError):
                 cancel_fee = sum(coin["amount"] for coin in cancel_inputs)
                 self.cancel_fee = cancel_fee
-            logging.debug(f"  Cancel transition with vault {vault['id']} for fee: {cancel_fee}")
+            logging.debug(
+                f"  Cancel transition with vault {vault['id']} for fee: {cancel_fee}"
+            )
 
         # snapshot coin pool after all spend attempts are cancelled
         if "coin_pool" in self.subplots:
@@ -766,41 +776,3 @@ class WTSim(object):
 
         plt.savefig("Results/StrategicValues.png")
         # plt.show()
-
-
-if __name__ == "__main__":
-    random.seed(21000000)
-    # FIXME: make it configurable through command line
-    logging.basicConfig(level=logging.DEBUG)
-
-    # FIXME: make it configurable through command line
-    # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
-    config = {
-        "n_stk": 7,
-        "n_man": 3,
-        "reserve_strat": "CUMMAX95Q90",
-        "estimate_strat": "ME30",
-        "O_version": 1,
-        "I_version": 2,
-        "feerate_src": "../block_fees/historical_fees.csv",
-        "estimate_smart_feerate_src": "fee_estimates_fine.csv",
-        "weights_src": "tx_weights.csv",
-        "block_datetime_src": "block_height_datetime.csv",
-    }
-    logging.info(f"Using config {config}")
-    fname = "TestReport"
-
-    sim = WTSim(config, fname)
-
-    start_block = 200000
-    end_block = 681000
-
-    # "operations", "coin_pool_age", "coin_pool", "risk_status"
-    subplots = ["balance", "vault_excesses", "cumulative_ops", "overpayments"]
-    sim.plot_simulation(start_block, end_block, subplots)
-
-    sim.plot_strategic_values(
-        start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1
-    )
-
-    # TODO: log the result as info?
