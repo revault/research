@@ -10,12 +10,12 @@ TODO:
 """
 
 import hashlib
-import time
-from pandas import read_csv, DataFrame, option_context, Timedelta, to_datetime
-from matplotlib import pyplot as plt
 import numpy as np
+import time
 
-MAX_TX_SIZE = 100000  # vBytes
+from matplotlib import pyplot as plt
+from pandas import read_csv, DataFrame, option_context, Timedelta, to_datetime
+from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, MAX_TX_SIZE
 
 
 class WTSM:
@@ -463,12 +463,10 @@ class WTSM:
         except (ValueError, KeyError):
             feerate = self._feerate(block_height)
 
-        P2WPKH_INPUT_vBytes = 67.75
-        P2WPKH_OUTPUT_vBytes = 31
         cf_tx_fee = (
-            10.75
-            + num_outputs * P2WPKH_OUTPUT_vBytes
-            + num_inputs * P2WPKH_INPUT_vBytes
+            TX_OVERHEAD_SIZE
+            + num_outputs * P2WPKH_OUTPUT_SIZE
+            + num_inputs * P2WPKH_INPUT_SIZE
         ) * feerate
 
         # If there is any remainder, use it first to pay the fee for this transaction
@@ -521,7 +519,7 @@ class WTSM:
                 elif (
                     cf_tx_fee
                     > coin["amount"]
-                    >= cf_tx_fee - P2WPKH_OUTPUT_vBytes * feerate
+                    >= cf_tx_fee - P2WPKH_OUTPUT_SIZE * feerate
                 ):
                     self.fbcoins.remove(coin)
                     cf_tx_fee = 0
@@ -531,10 +529,10 @@ class WTSM:
                     break
                 # The coin can't cover the fee even if the tx's size is reduced by not including
                 # this coin as an output
-                elif cf_tx_fee - P2WPKH_OUTPUT_vBytes * feerate > coin["amount"]:
+                elif cf_tx_fee - P2WPKH_OUTPUT_SIZE * feerate > coin["amount"]:
                     self.fbcoins.remove(coin)
                     cf_tx_fee -= coin["amount"]
-                    cf_tx_fee -= P2WPKH_OUTPUT_vBytes * feerate
+                    cf_tx_fee -= P2WPKH_OUTPUT_SIZE * feerate
                     num_outputs -= 1
 
             if cf_tx_fee > 0:
@@ -548,8 +546,8 @@ class WTSM:
             # so it is recomputed here to return the actual fee paid
             cf_size = (
                 10.75
-                + num_outputs * P2WPKH_OUTPUT_vBytes
-                + num_inputs * P2WPKH_INPUT_vBytes
+                + num_outputs * P2WPKH_OUTPUT_SIZE
+                + num_inputs * P2WPKH_INPUT_SIZE
             )
             if cf_size > MAX_TX_SIZE:
                 raise (

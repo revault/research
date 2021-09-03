@@ -1,12 +1,10 @@
-from WTSM import *
 import random
 
-# Size of the non-input and non-output parts of a Segwit tx, in virtual bytes
-TX_OVERHEAD_SIZE = 10.5
-# Size of a P2WPKH input in virtual bytes
-P2WPKH_INPUT_SIZE = 68
-# Size of a P2WPKH output in virtual bytes
-P2WPKH_OUTPUT_SIZE = 31
+from matplotlib import pyplot as plt
+from pandas import read_csv, DataFrame
+from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
+from WTSM import WTSM
+
 
 class AllocationError(Exception):
     pass
