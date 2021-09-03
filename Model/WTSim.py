@@ -75,7 +75,7 @@ class WTSim(object):
         expected_num_outputs = len(self.wt.O(block_height)) * new_reserves
         expected_num_inputs = len(self.wt.O(block_height)) * len(self.wt.vaults)
         expected_cf_fee = (
-            10.75
+            10.5
             + expected_num_outputs * P2WPKH_OUTPUT_vBytes
             + expected_num_inputs * P2WPKH_INPUT_vBytes
         ) * feerate
