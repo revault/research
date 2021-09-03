@@ -18,7 +18,6 @@ class Simulation(object):
     def __init__(
         self,
         config,
-        fname,
         with_balance=False,
         with_vault_excess=False,
         with_op_cost=False,
@@ -72,7 +71,6 @@ class Simulation(object):
 
         # FIXME: return report, don't write it here
         # Simulation report
-        self.fname = fname
         self.report_init = f"""\
         Watchtower config:\n\
         {config}\n\
@@ -365,12 +363,13 @@ class Simulation(object):
             amounts = [coin["amount"] for coin in self.wt.fbcoins]
             self.pool_after_catastrophe.append([block_height, amounts])
 
-    def plot_simulation(self, start_block, end_block):
-        plt.style.use(["plot_style.txt"])
-
+    def run(self, start_block, end_block):
+        """Iterate from {start_block} to {end_block}, executing transitions
+        according to configuration.
+        """
+        self.start_block, self.end_block = start_block, end_block
         self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
         switch = "good"
-        report = self.report_init
 
         self.initialize_sequence(start_block)
 
@@ -452,6 +451,15 @@ class Simulation(object):
                         switch = "good"
                         risk_off = block
                         self.wt_risk_time.append((risk_on, risk_off))
+
+    def plot(self, output=None):
+        """Plot info about the simulation stored according to configuration.
+        If {output} is set, will write the plot image to this file.
+
+        Returns a string containing a "report" about the simulation.
+        """
+        report = self.report_init
+        plt.style.use(["plot_style.txt"])
 
         subplots_len = sum(
             int(a)
@@ -538,7 +546,7 @@ class Simulation(object):
             for (risk_on, risk_off) in self.wt_risk_time:
                 axes[plot_num].axvspan(risk_off, risk_on, color="red", alpha=0.25)
 
-            report += f"Analysis time span: {start_block} to {end_block}\n"
+            report += f"Analysis time span: {self.start_block} to {self.end_block}\n"
             risk_time = 0
             for (risk_on, risk_off) in self.wt_risk_time:
                 risk_time += risk_off - risk_on
@@ -763,12 +771,12 @@ class Simulation(object):
             )
             plot_num += 1
 
-        logging.info(f"Report\n{report}")
+        if output is not None:
+            plt.savefig(f"{output}")
 
-        with open(f"Results/{self.fname}.txt", "w+", encoding="utf-8") as f:
-            f.write(report)
-        plt.savefig(f"Results/{self.fname}.png")
-        # plt.show()
+        plt.show()
+
+        return report
 
     def plot_strategic_values(
         self, start_block, end_block, estimate_strat, reserve_strat, O_version

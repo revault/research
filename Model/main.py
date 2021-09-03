@@ -23,11 +23,9 @@ if __name__ == "__main__":
         "block_datetime_src": "block_height_datetime.csv",
     }
     logging.info(f"Using config {config}")
-    fname = "TestReport"
 
     sim = Simulation(
         config,
-        fname,
         with_balance=True,
         with_vault_excess=True,
         with_cum_op_cost=True,
@@ -37,7 +35,13 @@ if __name__ == "__main__":
     start_block = 200000
     end_block = 681000
 
-    sim.plot_simulation(start_block, end_block)
+    sim.run(start_block, end_block)
+    report = sim.plot()
+    logging.info(f"Report\n{report}")
+
+    # FIXME: not portable! Should probably be a command line config!
+    with open("Results/TestReport.txt", "w+", encoding="utf-8") as f:
+        f.write(report)
 
     sim.plot_strategic_values(
         start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1
