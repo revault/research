@@ -210,9 +210,10 @@ class WTSM:
         t2 = reserve_rate * (272.0 / 4) + self._feerate_to_fee(10, "cancel", 0)
         return max(t1, t2)
 
-    def O(self, block_height):
-        """O is the coin distribution to create with a CF TX.
+    def fb_coins_dist(self, block_height):
+        """The coin distribution to create with a CF TX.
 
+        O(t) in the paper.
         The sum over O should be equal to the fee reserve per vault.
         There should be at least 1 Vm sized coin in O.
         """
@@ -221,9 +222,7 @@ class WTSM:
         if self.O_version == 0:
             Vm = self.Vm(block_height)
             Vb = self.Vb(block_height)
-            O = [Vb for i in range(self.O_0_factor)]
-            O.insert(0, Vm)
-            return O
+            return [Vm] + [Vb for i in range(self.O_0_factor)]
 
         # Strategy 1
         # O = [Vm, MVm, 2MVm, 3MVm, ...]
@@ -286,7 +285,8 @@ class WTSM:
         self.fbcoin_count += 1
         self.fbcoins.append(utxo)
 
-    def I0(self, block_height):
+    # FIXME: should return the picked coins
+    def grab_coins_0(self, block_height):
         """Select coins to consume as inputs for the tx transaction,
         remove them from P and V.
 
@@ -304,7 +304,8 @@ class WTSM:
 
         return total, num_inputs
 
-    def I1(self, block_height):
+    # FIXME: should return the picked coins
+    def grab_coins_1(self, block_height):
         """Select coins to consume as inputs for the tx transaction,
         remove them from P and V.
 
@@ -350,7 +351,7 @@ class WTSM:
         total_to_consume = total_unprocessed + total_negligible + total_old
         return total_to_consume, num_inputs
 
-    def I2(self, block_height):
+    def grab_coins_2(self, block_height):
         """Select coins to consume as inputs for the tx transaction,
         remove them from P and V.
         - unprocessed
@@ -359,7 +360,7 @@ class WTSM:
 
         Return: total amount of consumed inputs, number of inputs
         """
-        O = self.O(block_height)
+        fb_coins = self.fb_coins_dist(block_height)
         num_inputs = 0
 
         # Take all fbcoins that haven't been processed, get their total amount,
@@ -372,12 +373,12 @@ class WTSM:
                 self._remove_coin(coin)
                 num_inputs += 1
 
-        # Take all unallocated, old, and not in O fbcoins, get their total amount,
+        # Take all unallocated, old, and not in fb_coins, get their total amount,
         # and remove them from self.fbcoins
         total_unallocated = 0
         old_age = 12 * 7 * 144  # 13 weeks worth of blocks
         for coin in list(self.fbcoins):
-            if coin["allocation"] == None and coin["amount"] not in O:
+            if coin["allocation"] == None and coin["amount"] not in fb_coins:
                 if block_height - coin["processed"] > old_age:
                     total_unallocated += coin["amount"]
                     self._remove_coin(coin)
@@ -416,26 +417,26 @@ class WTSM:
         vaults_copy = list(self.vaults)
 
         # Set target values for our coin creation amounts
-        O = self.O(block_height)
+        fb_coins = self.fb_coins_dist(block_height)
 
         # Select and consume inputs with I(t), returning the total amount and the
         # number of inputs.
         if self.I_version == 0:
-            total_to_consume, num_inputs = self.I0(block_height)
+            total_to_consume, num_inputs = self.grab_coins_0(block_height)
         elif self.I_version == 1:
-            total_to_consume, num_inputs = self.I1(block_height)
+            total_to_consume, num_inputs = self.grab_coins_1(block_height)
         elif self.I_version == 2:
-            total_to_consume, num_inputs = self.I2(block_height)
+            total_to_consume, num_inputs = self.grab_coins_2(block_height)
 
         # Counter for number of outputs of the CF Tx
         num_outputs = 0
 
         # Now create a distribution of new coins
-        num_new_reserves = total_to_consume // (sum(O))
+        num_new_reserves = total_to_consume // (sum(fb_coins))
 
         if num_new_reserves == 0:
             print(
-                f"        CF Tx failed sice num_new_reserves = 0 (not accounting for expected fee)"
+                "        CF Tx failed sice num_new_reserves = 0 (not accounting for expected fee)"
             )
             # Not enough in available coins to fanout to 1 complete fee_reserve, so return
             # to initial state and return 0 (as in, 0 fee paid)
@@ -444,7 +445,7 @@ class WTSM:
             return 0
 
         for i in range(0, int(num_new_reserves)):
-            for x in O:
+            for x in fb_coins:
                 self.fbcoins.append(
                     {
                         "idx": self.fbcoin_count,
@@ -471,7 +472,7 @@ class WTSM:
         ) * feerate
 
         # If there is any remainder, use it first to pay the fee for this transaction
-        remainder = total_to_consume - (num_new_reserves * sum(O))
+        remainder = total_to_consume - (num_new_reserves * sum(fb_coins))
 
         # Check if remainder would cover the fee for the tx, if so, add the remainder-fee to the final new coin
         if remainder > cf_tx_fee:
@@ -804,7 +805,7 @@ class WTSM:
                 under_requirement.append(y)
         # For delegation
         available = [coin for coin in self.fbcoins if coin["allocation"] == None]
-        delegation_requires = sum(self.O(block_height)) - sum(
+        delegation_requires = sum(self.fb_coins_dist(block_height)) - sum(
             [coin["amount"] for coin in available]
         )
         if delegation_requires < 0:

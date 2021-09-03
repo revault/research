@@ -35,7 +35,8 @@ class WTSim(object):
         self.fname = fname
         self.report_init = f"""\
         Watchtower config:\n\
-        {config}O_0_factor: {self.wt.O_0_factor}\n\
+        {config}\n\
+        O_0_factor: {self.wt.O_0_factor}\n\
         O_1_factor: {self.wt.O_1_factor}\n\
         Refill excess: {self.REFILL_EXCESS}\n\
         Expected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\n\
@@ -51,9 +52,10 @@ class WTSim(object):
         num_vaults = len(self.wt.vaults)
         return num_vaults * required_reserve_per_vault
 
-    def R(self, block_height):
+    def amount_needed(self, block_height):
         """Returns amount to refill to ensure WT has sufficient operating balance.
         Used by stakeholder wallet software.
+        R(t) in the paper.
 
         Note: stakeholder knows WT's balance and num_vaults (or EXPECTED_ACTIVE_VAULTS).
               Stakeholder doesn't know which coins are allocated or not.
@@ -74,8 +76,8 @@ class WTSim(object):
             feerate = self.wt._estimate_smart_feerate(block_height)
         except (ValueError, KeyError):
             feerate = self.wt._feerate(block_height)
-        expected_num_outputs = len(self.wt.O(block_height)) * new_reserves
-        expected_num_inputs = len(self.wt.O(block_height)) * len(self.wt.vaults)
+        expected_num_outputs = len(self.wt.fb_coins_dist(block_height)) * new_reserves
+        expected_num_inputs = len(self.wt.fb_coins_dist(block_height)) * len(self.wt.vaults)
         expected_cf_fee = (
             TX_OVERHEAD_SIZE
             + expected_num_outputs * P2WPKH_OUTPUT_SIZE
@@ -87,8 +89,8 @@ class WTSim(object):
 
     def initialize_sequence(self, block_height):
         print(f"Initialize sequence at block {block_height}")
-        ## Refill transition
-        refill_amount = self.R(block_height)
+        # Refill transition
+        refill_amount = self.amount_needed(block_height)
         if refill_amount <= 0:
             print(f"  Refill not required, WT has enough bitcoin")
         else:
@@ -130,7 +132,7 @@ class WTSim(object):
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_cf.append([block_height, amounts])
 
-        ## Allocation transitions
+        # Allocation transitions
         for i in range(0, self.EXPECTED_ACTIVE_VAULTS):
             vaultID = self.vaults_df["vaultID"][self.vault_count]
             self.vault_count += 1
@@ -151,10 +153,10 @@ class WTSim(object):
             self.vault_excess_after_delegation.append([block_height, excesses])
 
     def refill_sequence(self, block_height):
-        refill_amount = self.R(block_height)
+        refill_amount = self.amount_needed(block_height)
         if refill_amount > 0:
             print(f"Refill sequence at block {block_height}")
-            ## Refill transition
+            # Refill transition
             print(f"  Refill transition at block {block_height} by {refill_amount}")
             self.wt.refill(refill_amount)
 
@@ -181,7 +183,7 @@ class WTSim(object):
                         excesses.append(excess)
                 self.vault_excess_before_cf.append([block_height, excesses])
 
-            ## Consolidate-fanout transition
+            # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
             self.cf_fee = self.wt.consolidate_fanout(block_height + 1)
             print(
@@ -205,13 +207,13 @@ class WTSim(object):
                         excesses.append(excess)
                 self.vault_excess_after_cf.append([block_height + 7, excesses])
 
-            ## Top up sequence
+            # Top up sequence
             # Top up delegations after confirmation of CF Tx, because consolidating coins
             # can diminish the fee_reserve of a vault
             self.top_up_sequence(block_height + 7)
 
     def _spend_init(self, block_height):
-        ## Top up sequence
+        # Top up sequence
         # Top up delegations before processing a delegation, because time has passed, and we mustn't accept
         # delegation if the available coin pool is insufficient.
         self.top_up_sequence(block_height)
@@ -259,7 +261,7 @@ class WTSim(object):
     def spend_sequence(self, block_height):
         print(f"Spend sequence at block {block_height}")
         vaultID = self._spend_init(block_height)
-        ## Spend transition
+        # Spend transition
         print(f"  Spend transition at block {block_height}")
         self.wt.process_spend(vaultID)
 
@@ -271,7 +273,7 @@ class WTSim(object):
     def cancel_sequence(self, block_height):
         print(f"Cancel sequence at block {block_height}")
         vaultID = self._spend_init(block_height)
-        ## Cancel transition
+        # Cancel transition
         cancel_inputs = self.wt.process_cancel(vaultID, block_height)
         self.wt.finalize_cancel(vaultID)
         self.cancel_fee = sum(coin["amount"] for coin in cancel_inputs)
@@ -293,7 +295,7 @@ class WTSim(object):
     def catastrophe_sequence(self, block_height):
         print(f"Catastrophe sequence at block {block_height}")
         for vault in self.wt.vaults:
-            ## Cancel transition
+            # Cancel transition
             cancel_inputs = self.wt.process_cancel(vault["id"], block_height)
             self.wt.finalize_cancel(vault["id"])
             # If a cancel fee has already been paid this block, sum those fees
@@ -721,7 +723,7 @@ class WTSim(object):
         for block in range(start_block, end_block):
             if block % 1000 == 0:
                 print(f"Processing block {block}")
-                Os.append([block, self.wt.O(block)])
+                Os.append([block, self.wt.fb_coins_dist(block)])
             rows.append(
                 [block, self.wt.Vm(block), self.wt.fee_reserve_per_vault(block)]
             )
@@ -743,7 +745,7 @@ class WTSim(object):
         axes[1].set_ylabel("Feerate (sats/vByte)")
         axes[1].set_title("Historic Feerates")
 
-        # Plot amounts of O(t)
+        # Plot amounts of fb_coins_dist(t)
         for frame in Os:
             tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
             Os_df = DataFrame(tuples, columns=["block", "amount"])
