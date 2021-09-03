@@ -29,13 +29,23 @@ class WTSim(object):
 
         # Simulation report
         self.fname = fname
-        self.report_init = f"Watchtower config:\n{config}O_0_factor: {self.wt.O_0_factor}\nO_1_factor: {self.wt.O_1_factor}\nRefill excess: {self.REFILL_EXCESS}\nExpected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\nRefill period: {self.REFILL_PERIOD}\nDelegation period: {self.DELEGATION_PERIOD}\nInvalid spend rate: {self.INVALID_SPEND_RATE}\nCatastrophe rate: {self.CATASTROPHE_RATE}\n"
+        self.report_init = f"""\
+        Watchtower config:\n\
+        {config}O_0_factor: {self.wt.O_0_factor}\n\
+        O_1_factor: {self.wt.O_1_factor}\n\
+        Refill excess: {self.REFILL_EXCESS}\n\
+        Expected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\n\
+        Refill period: {self.REFILL_PERIOD}\n\
+        Delegation period: {self.DELEGATION_PERIOD}\n\
+        Invalid spend rate: {self.INVALID_SPEND_RATE}\n\
+        Catastrophe rate: {self.CATASTROPHE_RATE}\n\
+        """
 
     def required_reserve(self, block_height):
         """The amount the WT should have in reserve based on the number of active vaults"""
         required_reserve_per_vault = self.wt.fee_reserve_per_vault(block_height)
         num_vaults = len(self.wt.vaults)
-        return (num_vaults) * required_reserve_per_vault
+        return num_vaults * required_reserve_per_vault
 
     def R(self, block_height):
         """Returns amount to refill to ensure WT has sufficient operating balance.
