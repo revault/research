@@ -15,7 +15,20 @@ class AllocationError(Exception):
 class Simulation(object):
     """Simulator for fee-reserve management of a Revault Watchtower."""
 
-    def __init__(self, config, fname):
+    def __init__(
+        self,
+        config,
+        fname,
+        with_balance=False,
+        with_vault_excess=False,
+        with_op_cost=False,
+        with_cum_op_cost=False,
+        with_overpayments=False,
+        with_coin_pool=False,
+        with_coin_pool_age=False,
+        with_risk_status=False,
+        with_risk_time=False,
+    ):
         # Stakeholder parameters
         self.EXPECTED_ACTIVE_VAULTS = 5  # Units: fee reserve per vault
         # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
@@ -32,6 +45,32 @@ class Simulation(object):
         self.vault_count = 0
         self.vault_id = 0
 
+        # Simulation configuration
+        self.with_balance = with_balance
+        self.balances = []
+        self.with_vault_excess = with_vault_excess
+        self.vault_excess_before_cf = []
+        self.vault_excess_after_cf = []
+        self.vault_excess_after_delegation = []
+        self.with_op_cost = with_op_cost
+        self.with_cum_op_cost = with_cum_op_cost
+        self.costs = []
+        self.with_overpayments = with_overpayments
+        self.overpayments = []
+        self.with_coin_pool = with_coin_pool
+        self.pool_after_refill = []
+        self.pool_after_cf = []
+        self.pool_after_spend = []
+        self.pool_after_cancel = []
+        self.pool_after_catastrophe = []
+        self.with_risk_status = with_risk_status
+        self.risk_status = []
+        self.with_coin_pool_age = with_coin_pool_age
+        self.coin_pool_age = []
+        self.with_risk_time = with_risk_time
+        self.wt_risk_time = []
+
+        # FIXME: return report, don't write it here
         # Simulation report
         self.fname = fname
         self.report_init = f"""\
@@ -113,12 +152,12 @@ class Simulation(object):
                 self.refill_fee = 109.5 * self.wt._feerate(block_height)
 
             # snapshot coin pool after refill Tx
-            if "coin_pool" in self.subplots:
+            if self.with_coin_pool:
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_refill.append([block_height, amounts])
 
             # snapshot vault excesses before CF Tx
-            if "vault_excesses" in self.subplots:
+            if self.with_vault_excess:
                 vault_requirement = self.wt.fee_reserve_per_vault(block_height)
                 excesses = []
                 for vault in self.wt.vaults:
@@ -130,14 +169,14 @@ class Simulation(object):
                         excesses.append(excess)
                 self.vault_excess_before_cf.append([block_height, excesses])
 
-            ## Consolidate-fanout transition
+            # Consolidate-fanout transition
             self.cf_fee = self.wt.consolidate_fanout(block_height)
             logging.debug(
                 f"  Consolidate-fanout transition at block {block_height} with fee: {self.cf_fee}"
             )
 
             # snapshot coin pool after CF Tx
-            if "coin_pool" in self.subplots:
+            if self.with_coin_pool:
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_cf.append([block_height, amounts])
 
@@ -148,7 +187,7 @@ class Simulation(object):
             self.vault_count += 1
 
         # snapshot vault excesses after delegations
-        if "vault_excesses" in self.subplots:
+        if self.with_vault_excess:
             vault_requirement = self.wt.fee_reserve_per_vault(block_height)
             excesses = []
             for vault in self.wt.vaults:
@@ -176,12 +215,12 @@ class Simulation(object):
                 self.refill_fee = 109.5 * self.wt._feerate(block_height)
 
             # snapshot coin pool after refill Tx
-            if "coin_pool" in self.subplots:
+            if self.with_coin_pool:
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_refill.append([block_height, amounts])
 
             # snapshot vault excesses before CF Tx
-            if "vault_excesses" in self.subplots:
+            if self.with_vault_excess:
                 vault_requirement = self.wt.fee_reserve_per_vault(block_height)
                 excesses = []
                 for vault in self.wt.vaults:
@@ -201,12 +240,12 @@ class Simulation(object):
             )
 
             # snapshot coin pool after CF Tx confirmation
-            if "coin_pool" in self.subplots:
+            if self.with_coin_pool:
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_cf.append([block_height + 7, amounts])
 
             # snapshot vault excesses after CF Tx
-            if "vault_excesses" in self.subplots:
+            if self.with_vault_excess:
                 excesses = []
                 for vault in self.wt.vaults:
                     excess = (
@@ -239,7 +278,7 @@ class Simulation(object):
             raise (AllocationError())
 
         # snapshot vault excesses after delegation
-        if "vault_excesses" in self.subplots:
+        if self.with_vault_excess:
             vault_requirement = self.wt.fee_reserve_per_vault(block_height)
             excesses = []
             for vault in self.wt.vaults:
@@ -274,7 +313,7 @@ class Simulation(object):
         self.wt.process_spend(vaultID)
 
         # snapshot coin pool after spend attempt
-        if "coin_pool" in self.subplots:
+        if self.with_coin_pool:
             amounts = [coin["amount"] for coin in self.wt.fbcoins]
             self.pool_after_spend.append([block_height, amounts])
 
@@ -290,12 +329,12 @@ class Simulation(object):
         )
 
         # snapshot coin pool after cancel
-        if "coin_pool" in self.subplots:
+        if self.with_coin_pool:
             amounts = [coin["amount"] for coin in self.wt.fbcoins]
             self.pool_after_cancel.append([block_height, amounts])
 
         # Compute overpayments
-        if "overpayments" in self.subplots:
+        if self.with_overpayments:
             try:
                 feerate = self.wt._estimate_smart_feerate(block_height)
             except (ValueError, KeyError):
@@ -322,32 +361,14 @@ class Simulation(object):
             )
 
         # snapshot coin pool after all spend attempts are cancelled
-        if "coin_pool" in self.subplots:
+        if self.with_coin_pool:
             amounts = [coin["amount"] for coin in self.wt.fbcoins]
             self.pool_after_catastrophe.append([block_height, amounts])
 
-    def plot_simulation(self, start_block, end_block, subplots):
-
+    def plot_simulation(self, start_block, end_block):
         plt.style.use(["plot_style.txt"])
 
         self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
-
-        self.subplots = subplots
-        self.pool_after_refill = []
-        self.pool_after_cf = []
-        self.pool_after_spend = []
-        self.pool_after_cancel = []
-        self.pool_after_catastrophe = []
-        self.vault_excess_before_cf = []
-        self.vault_excess_after_cf = []
-        self.vault_excess_after_delegation = []
-        self.overpayments = []
-        balances = []
-        risk_status = []
-        costs = []
-        coin_pool_age = []
-        wt_risk_time = []
-
         switch = "good"
         report = self.report_init
 
@@ -380,35 +401,37 @@ class Simulation(object):
                         self.initialize_sequence(block + 10)
             # Stop simulation, exit loop and report results
             except (AllocationError):
-                logging.debug(f"Allocation error at block {block}")
+                logging.error(f"Allocation error at block {block}")
                 break
 
-            if "balance" in subplots:
-                balances.append(
+            if self.with_balance:
+                self.balances.append(
                     [block, self.wt.balance(), self.required_reserve(block)]
                 )
-            if "risk_status" in subplots:
+            if self.with_risk_status:
                 status = self.wt.risk_status(block)
                 if (status["vaults_at_risk"] != 0) or (
                     status["delegation_requires"] != 0
                 ):
-                    risk_status.append(status)
-            if "operations" in subplots or "cumulative_ops" in subplots:
-                costs.append([block, self.refill_fee, self.cf_fee, self.cancel_fee])
+                    self.risk_status.append(status)
+            if self.with_op_cost or self.with_cum_op_cost:
+                self.costs.append(
+                    [block, self.refill_fee, self.cf_fee, self.cancel_fee]
+                )
                 self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
 
-            if "coin_pool_age" in subplots:
+            if self.with_coin_pool_age:
                 try:
                     processed = [
                         coin for coin in self.wt.fbcoins if coin["processed"] != None
                     ]
                     ages = [block - coin["processed"] for coin in processed]
                     age = sum(ages)
-                    coin_pool_age.append([block, age])
+                    self.coin_pool_age.append([block, age])
                 except:
                     pass  # If processed is empty, error raised
 
-            if "cumulative_ops" in subplots:
+            if self.with_cum_op_cost:
                 # Check if wt becomes risky
                 if switch == "good":
                     for vault in self.wt.vaults:
@@ -428,15 +451,29 @@ class Simulation(object):
                     if True not in any_risk:
                         switch = "good"
                         risk_off = block
-                        wt_risk_time.append((risk_on, risk_off))
+                        self.wt_risk_time.append((risk_on, risk_off))
 
-        figure, axes = plt.subplots(len(subplots), 1, sharex=True)
+        subplots_len = sum(
+            int(a)
+            for a in [
+                self.with_balance,
+                self.with_vault_excess,
+                self.with_op_cost,
+                self.with_cum_op_cost,
+                self.with_overpayments,
+                self.with_coin_pool,
+                self.with_risk_status,
+                self.with_coin_pool_age,
+                self.with_risk_time,
+            ]
+        )
+        figure, axes = plt.subplots(subplots_len, 1, sharex=True)
         plot_num = 0
 
         # Plot WT balance vs total required reserve
-        if "balance" in subplots:
+        if self.with_balance:
             bal_df = DataFrame(
-                balances, columns=["block", "balance", "required reserve"]
+                self.balances, columns=["block", "balance", "required reserve"]
             )
             bal_df.set_index(["block"], inplace=True)
             bal_df.plot(ax=axes[plot_num], title="WT Balance", legend=True)
@@ -445,12 +482,12 @@ class Simulation(object):
             plot_num += 1
 
         costs_df = DataFrame(
-            costs, columns=["block", "Refill Fee", "CF Fee", "Cancel Fee"]
+            self.costs, columns=["block", "Refill Fee", "CF Fee", "Cancel Fee"]
         )
         report += f"Refill operations: {costs_df['Refill Fee'].count()}\n"
 
         # Plot refill amount vs block, operating expense vs block
-        if "operations" in subplots:
+        if self.with_op_cost:
             costs_df.plot.scatter(
                 x="block",
                 y="Refill Fee",
@@ -478,7 +515,7 @@ class Simulation(object):
             plot_num += 1
 
         # Plot cumulative operating costs (CF, Cancel, Spend)
-        if "cumulative_ops" in subplots:
+        if self.with_cum_op_cost:
             cumulative_costs_df = costs_df
             cumulative_costs_df.set_index(["block"], inplace=True)
             cumulative_costs_df = cumulative_costs_df.fillna(0).cumsum()
@@ -496,18 +533,18 @@ class Simulation(object):
 
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve
-            for (risk_on, risk_off) in wt_risk_time:
+            for (risk_on, risk_off) in self.wt_risk_time:
                 axes[plot_num].axvspan(risk_off, risk_on, color="red", alpha=0.25)
 
             report += f"Analysis time span: {start_block} to {end_block}\n"
             risk_time = 0
-            for (risk_on, risk_off) in wt_risk_time:
+            for (risk_on, risk_off) in self.wt_risk_time:
                 risk_time += risk_off - risk_on
             report += f"Total time at risk: {risk_time} blocks\n"
 
             # What about avg recovery time?
             recovery_times = []
-            for (risk_on, risk_off) in wt_risk_time:
+            for (risk_on, risk_off) in self.wt_risk_time:
                 recovery_times.append(risk_off - risk_on)
             if recovery_times != []:
                 report += f"Mean recovery time: {np.mean(recovery_times)} blocks\n"
@@ -517,7 +554,7 @@ class Simulation(object):
             plot_num += 1
 
         # Plot coin pool amounts vs block
-        if "coin_pool" in subplots:
+        if self.with_coin_pool:
             for frame in self.pool_after_refill:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
                 pool_df = DataFrame(tuples, columns=["block", "amount"])
@@ -579,19 +616,20 @@ class Simulation(object):
                     label="After Catastrophe",
                 )
             handles, labels = axes[plot_num].get_legend_handles_labels()
-            try:
-                i = subplots.index("operations")
-                handles, _labels = axes[i].get_legend_handles_labels()
-                labels = set(labels)
-                axes[plot_num].legend(handles, labels, loc="upper right")
-            except (ValueError):
-                pass
+            # FIXME
+            # try:
+            #     i = subplots.index("operations")
+            #     handles, _labels = axes[i].get_legend_handles_labels()
+            #     labels = set(labels)
+            #     axes[plot_num].legend(handles, labels, loc="upper right")
+            # except (ValueError):
+            #     pass
             axes[plot_num].set_title("Feebump Coin Pool")
             axes[plot_num].set_ylabel("Coin Amount (Satoshis)", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
-        if "vault_excesses" in subplots:
+        if self.with_vault_excess:
             # AS SCATTER
             # for frame in self.vault_excess_after_cf:
             #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
@@ -614,7 +652,7 @@ class Simulation(object):
             # axes[plot_num].set_xlabel("Block", labelpad=15)
             # plot_num += 1
 
-            ## Normalised sum of vault excesses
+            # Normalised sum of vault excesses
             # excesses_df = DataFrame(columns=['block', 'amount'])
             vault_excess_after_cf = []
             for frame in self.vault_excess_after_cf:
@@ -662,30 +700,29 @@ class Simulation(object):
             plot_num += 1
 
         # Plot WT risk status
-        if "risk_status" in subplots:
-            if risk_status != []:
-                risk_status_df = DataFrame(risk_status)
-                risk_status_df.set_index(["block"], inplace=True)
-                risk_status_df["num_vaults"].plot(
-                    ax=axes[plot_num], label="number of vaults", color="r", legend=True
-                )
-                risk_status_df["vaults_at_risk"].plot(
-                    ax=axes[plot_num], label="vaults at risk", color="b", legend=True
-                )
-                ax2 = axes[plot_num].twinx()
-                risk_status_df["delegation_requires"].plot(
-                    ax=ax2, label="new delegation requires", color="g", legend=True
-                )
-                risk_status_df["severity"].plot(
-                    ax=ax2, label="total severity of risk", color="k", legend=True
-                )
-                axes[plot_num].set_ylabel("Vaults", labelpad=15)
-                axes[plot_num].set_xlabel("Block", labelpad=15)
-                ax2.set_ylabel("Satoshis", labelpad=15)
-                plot_num += 1
+        if self.with_risk_status and self.risk_status != []:
+            risk_status_df = DataFrame(self.risk_status)
+            risk_status_df.set_index(["block"], inplace=True)
+            risk_status_df["num_vaults"].plot(
+                ax=axes[plot_num], label="number of vaults", color="r", legend=True
+            )
+            risk_status_df["vaults_at_risk"].plot(
+                ax=axes[plot_num], label="vaults at risk", color="b", legend=True
+            )
+            ax2 = axes[plot_num].twinx()
+            risk_status_df["delegation_requires"].plot(
+                ax=ax2, label="new delegation requires", color="g", legend=True
+            )
+            risk_status_df["severity"].plot(
+                ax=ax2, label="total severity of risk", color="k", legend=True
+            )
+            axes[plot_num].set_ylabel("Vaults", labelpad=15)
+            axes[plot_num].set_xlabel("Block", labelpad=15)
+            ax2.set_ylabel("Satoshis", labelpad=15)
+            plot_num += 1
 
         # Plot overpayments
-        if "overpayments" in subplots:
+        if self.with_overpayments:
             df = DataFrame(self.overpayments, columns=["block", "overpayments"])
             df["cumulative"] = df["overpayments"].cumsum()
             df.set_index(["block"], inplace=True)
@@ -700,8 +737,8 @@ class Simulation(object):
             plot_num += 1
 
         # Plot coin pool age
-        if "coin_pool_age" in subplots:
-            age_df = DataFrame(coin_pool_age, columns=["block", "age"])
+        if self.with_coin_pool_age:
+            age_df = DataFrame(self.coin_pool_age, columns=["block", "age"])
             age_df.plot.scatter(
                 x="block",
                 y="age",

@@ -25,14 +25,19 @@ if __name__ == "__main__":
     logging.info(f"Using config {config}")
     fname = "TestReport"
 
-    sim = Simulation(config, fname)
+    sim = Simulation(
+        config,
+        fname,
+        with_balance=True,
+        with_vault_excess=True,
+        with_cum_op_cost=True,
+        with_overpayments=True,
+    )
 
     start_block = 200000
     end_block = 681000
 
-    # "operations", "coin_pool_age", "coin_pool", "risk_status"
-    subplots = ["balance", "vault_excesses", "cumulative_ops", "overpayments"]
-    sim.plot_simulation(start_block, end_block, subplots)
+    sim.plot_simulation(start_block, end_block)
 
     sim.plot_strategic_values(
         start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1
