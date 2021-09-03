@@ -1,8 +1,12 @@
 from WTSM import *
 import random
 
-random.seed(21000000)
-
+# Size of the non-input and non-output parts of a Segwit tx, in virtual bytes
+TX_OVERHEAD_SIZE = 10.5
+# Size of a P2WPKH input in virtual bytes
+P2WPKH_INPUT_SIZE = 67.75
+# Size of a P2WPKH output in virtual bytes
+P2WPKH_OUTPUT_SIZE = 31
 
 class AllocationError(Exception):
     pass
@@ -70,14 +74,12 @@ class WTSim(object):
             feerate = self.wt._estimate_smart_feerate(block_height)
         except (ValueError, KeyError):
             feerate = self.wt._feerate(block_height)
-        P2WPKH_INPUT_vBytes = 67.75
-        P2WPKH_OUTPUT_vBytes = 31
         expected_num_outputs = len(self.wt.O(block_height)) * new_reserves
         expected_num_inputs = len(self.wt.O(block_height)) * len(self.wt.vaults)
         expected_cf_fee = (
-            10.5
-            + expected_num_outputs * P2WPKH_OUTPUT_vBytes
-            + expected_num_inputs * P2WPKH_INPUT_vBytes
+            TX_OVERHEAD_SIZE
+            + expected_num_outputs * P2WPKH_OUTPUT_SIZE
+            + expected_num_inputs * P2WPKH_INPUT_SIZE
         ) * feerate
 
         R += expected_cf_fee
@@ -763,6 +765,8 @@ class WTSim(object):
 
 
 if __name__ == "__main__":
+    random.seed(21000000)
+
     # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
     config = {
         "n_stk": 7,
