@@ -9,13 +9,10 @@ TODO:
     - could break with certain DELEGATION_PERIODs. 
 """
 
-import hashlib
 import logging
 import numpy as np
-import time
 
-from matplotlib import pyplot as plt
-from pandas import read_csv, DataFrame, option_context, Timedelta, to_datetime
+from pandas import read_csv
 from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, MAX_TX_SIZE
 
 
@@ -539,7 +536,7 @@ class WTSM:
             if cf_tx_fee > 0:
                 raise (
                     RuntimeError(
-                        f"The fee for the consolidate-fanout transaction is too high to pay for even if it creates 0 outputs"
+                        "The fee for the consolidate-fanout transaction is too high to pay for even if it creates 0 outputs"
                     )
                 )
 
@@ -553,7 +550,7 @@ class WTSM:
             if cf_size > MAX_TX_SIZE:
                 raise (
                     RuntimeError(
-                        f"The consolidate_fanout transactino is too large! Please be smarter when constructing it."
+                        "The consolidate_fanout transactino is too large! Please be smarter when constructing it."
                     )
                 )
             cf_tx_fee = cf_size * feerate

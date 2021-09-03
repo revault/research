@@ -2,6 +2,7 @@ import logging
 import random
 
 from matplotlib import pyplot as plt
+import numpy as np
 from pandas import DataFrame
 from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
 from WTSM import WTSM
@@ -581,7 +582,7 @@ class WTSim(object):
             plot_num += 1
 
         if "vault_excesses" in subplots:
-            ## AS SCATTER
+            # AS SCATTER
             # for frame in self.vault_excess_after_cf:
             #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
             #     excesses_df = DataFrame(tuples, columns=['block', 'amount'])
@@ -701,6 +702,8 @@ class WTSim(object):
             )
             plot_num += 1
 
+        logging.info(f"Report\n{report}")
+
         with open(f"Results/{self.fname}.txt", "w+", encoding="utf-8") as f:
             f.write(report)
         plt.savefig(f"Results/{self.fname}.png")
@@ -718,7 +721,6 @@ class WTSim(object):
 
         # Plot strategic values & estimateSmartFee history
         rows = []
-        fees_paid_rows = []
         Os = []
         for block in range(start_block, end_block):
             if block % 1000 == 0:
