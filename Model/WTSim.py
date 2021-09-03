@@ -2,7 +2,7 @@ import logging
 import random
 
 from matplotlib import pyplot as plt
-from pandas import read_csv, DataFrame
+from pandas import DataFrame
 from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
 from WTSM import WTSM
 
@@ -28,7 +28,7 @@ class WTSim(object):
 
         # WT state machine
         self.wt = WTSM(config)
-        self.vaults_df = read_csv("vaultIDs.csv")
+        self.vault_id = 0
 
         # Simulation report
         self.fname = fname
@@ -44,6 +44,10 @@ class WTSim(object):
         Invalid spend rate: {self.INVALID_SPEND_RATE}\n\
         Catastrophe rate: {self.CATASTROPHE_RATE}\n\
         """
+
+    def new_vault_id(self):
+        self.vault_id += 1
+        return self.vault_id
 
     def required_reserve(self, block_height):
         """The amount the WT should have in reserve based on the number of active vaults"""
@@ -133,10 +137,9 @@ class WTSim(object):
 
         # Allocation transitions
         for i in range(0, self.EXPECTED_ACTIVE_VAULTS):
-            vaultID = self.vaults_df["vaultID"][self.vault_count]
-            self.vault_count += 1
             amount = 10e10  # 100 BTC
-            self.wt.allocate(vaultID, amount, block_height)
+            self.wt.allocate(self.new_vault_id(), amount, block_height)
+            self.vault_count += 1
 
         # snapshot vault excesses after delegations
         if "vault_excesses" in self.subplots:
@@ -217,15 +220,13 @@ class WTSim(object):
         # delegation if the available coin pool is insufficient.
         self.top_up_sequence(block_height)
 
-        # Delegate a vault
-        vaultID = self.vaults_df["vaultID"][self.vault_count]
-        self.vault_count += 1
-        amount = 10e10  # 100 BTC
-
-        ## Allocation transition
+        # Allocation transition
         # If WT fails to acknowledge new delegation, raise AllocationError
         try:
-            self.wt.allocate(vaultID, amount, block_height)
+            # Delegate a vault
+            amount = 10e10  # 100 BTC
+            self.wt.allocate(self.new_vault_id(), amount, block_height)
+            self.vault_count += 1
         except (RuntimeError):
             raise (AllocationError())
 
@@ -251,7 +252,7 @@ class WTSim(object):
         # loop over copy since allocate may remove an element, changing list index
         for vault in list(self.wt.vaults):
             try:
-                ## Allocation transition
+                # Allocation transition
                 self.wt.allocate(vault["id"], vault["amount"], block_height)
             except (RuntimeError):
                 logging.debug(f"  Allocation transition FAILED for vault {vault['id']}")
@@ -784,6 +785,7 @@ if __name__ == "__main__":
         "weights_src": "tx_weights.csv",
         "block_datetime_src": "block_height_datetime.csv",
     }
+    logging.info(f"Using config {config}")
     fname = "TestReport"
 
     sim = WTSim(config, fname)
@@ -798,3 +800,5 @@ if __name__ == "__main__":
     sim.plot_strategic_values(
         start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1
     )
+
+    # TODO: log the result as info?
