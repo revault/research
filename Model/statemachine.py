@@ -183,7 +183,7 @@ class StateMachine:
             * (
                 int(
                     self.weights_df[tx_type][self.n_stk, self.n_man]
-                    + n_fb_inputs * self.weights_df["feebump"][self.n_stk, self.n_man]
+                    + n_fb_inputs * P2WPKH_INPUT_SIZE
                 )
                 / 4
             ),
@@ -203,7 +203,9 @@ class StateMachine:
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
         feerate = self._feerate(block_height)
-        Vm = self._feerate_to_fee(feerate, "cancel", 0) + feerate * (272.0 / 4)
+        Vm = self._feerate_to_fee(feerate, "cancel", 0) + feerate * (
+            float(P2WPKH_INPUT_SIZE) / 4
+        )
         if Vm <= 0:
             raise ValueError(
                 f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
@@ -215,7 +217,9 @@ class StateMachine:
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
         t1 = (reserve - self.Vm(block_height)) / self.O_0_factor
-        t2 = reserve_rate * (272.0 / 4) + self._feerate_to_fee(10, "cancel", 0)
+        t2 = reserve_rate * (float(P2WPKH_INPUT_SIZE) / 4) + self._feerate_to_fee(
+            10, "cancel", 0
+        )
         return max(t1, t2)
 
     def fb_coins_dist(self, block_height):
@@ -274,7 +278,9 @@ class StateMachine:
         """
         # FIXME: What is a reasonable factor of a 'negligible coin'?
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * (272.0 / 4) + self._feerate_to_fee(10, "cancel", 0)
+        t1 = reserve_rate * (float(P2WPKH_INPUT_SIZE) / 4) + self._feerate_to_fee(
+            10, "cancel", 0
+        )
         t2 = self.Vm(block_height)
         minimum = min(t1, t2)
         if coin["amount"] <= minimum:
