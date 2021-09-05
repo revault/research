@@ -46,7 +46,3 @@ if __name__ == "__main__":
     if REPORT_FILENAME is not None:
         with open(REPORT_FILENAME, "w+", encoding="utf-8") as f:
             f.write(report)
-
-    sim.plot_strategic_values(
-        start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1
-    )

@@ -27,6 +27,7 @@ class Simulation(object):
         with_coin_pool_age=False,
         with_risk_status=False,
         with_risk_time=False,
+        with_fb_coins_dist=False,
     ):
         # Stakeholder parameters
         self.EXPECTED_ACTIVE_VAULTS = 5  # Units: fee reserve per vault
@@ -68,6 +69,9 @@ class Simulation(object):
         self.coin_pool_age = []
         self.with_risk_time = with_risk_time
         self.wt_risk_time = []
+        self.with_fb_coins_dist = with_fb_coins_dist
+        self.fb_coins_dist = []
+        self.Vm = []
 
         # FIXME: return report, don't write it here
         # Simulation report
@@ -270,9 +274,12 @@ class Simulation(object):
         try:
             # Delegate a vault
             amount = 10e10  # 100 BTC
-            self.wt.allocate(self.new_vault_id(), amount, block_height)
+            vault_id = self.new_vault_id()
+            logging.debug(f"  Allocation transition at block {block_height} to vault {vault_id}")
+            self.wt.allocate(vault_id, amount, block_height)
             self.vault_count += 1
         except (RuntimeError):
+            logging.debug(f"  Allocation transition FAILED for vault {vault_id}")
             raise (AllocationError())
 
         # snapshot vault excesses after delegation
@@ -298,6 +305,7 @@ class Simulation(object):
         for vault in list(self.wt.vaults):
             try:
                 # Allocation transition
+                logging.debug(f"  Allocation transition at block {block_height} to vault {vault['id']}")
                 self.wt.allocate(vault["id"], vault["amount"], block_height)
             except (RuntimeError):
                 logging.debug(f"  Allocation transition FAILED for vault {vault['id']}")
@@ -340,6 +348,9 @@ class Simulation(object):
             self.overpayments.append([block_height, self.cancel_fee - feerate])
 
     def catastrophe_sequence(self, block_height):
+        # Topup sequence
+        self.top_up_sequence(block_height)
+
         logging.debug(f"Catastrophe sequence at block {block_height}")
         for vault in self.wt.vaults:
             # Cancel transition
@@ -400,6 +411,7 @@ class Simulation(object):
                         self.initialize_sequence(block + 10)
             # Stop simulation, exit loop and report results
             except (AllocationError):
+                self.end_block = block
                 logging.error(f"Allocation error at block {block}")
                 break
 
@@ -452,7 +464,13 @@ class Simulation(object):
                         risk_off = block
                         self.wt_risk_time.append((risk_on, risk_off))
 
-    def plot(self, output=None):
+            if self.with_fb_coins_dist:
+                if block % 1000 == 0:
+                    self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
+                self.Vm.append([block, self.wt.Vm(block)])
+
+
+    def plot(self, output=None, show=False):
         """Plot info about the simulation stored according to configuration.
         If {output} is set, will write the plot image to this file.
 
@@ -473,6 +491,7 @@ class Simulation(object):
                 self.with_risk_status,
                 self.with_coin_pool_age,
                 self.with_risk_time,
+                self.with_fb_coins_dist,
             ]
         )
         figure, axes = plt.subplots(subplots_len, 1, sharex=True)
@@ -525,7 +544,7 @@ class Simulation(object):
             plot_num += 1
 
         # Plot cumulative operating costs (CF, Cancel, Spend)
-        if self.with_cum_op_cost and costs_df is not None and self.wt_risk_time != []:
+        if self.with_cum_op_cost and costs_df is not None:
             cumulative_costs_df = costs_df
             cumulative_costs_df.set_index(["block"], inplace=True)
             cumulative_costs_df = cumulative_costs_df.fillna(0).cumsum()
@@ -717,7 +736,8 @@ class Simulation(object):
                 color="b",
                 label="Before CF",
             )
-            axes[plot_num].set_ylabel("Mean Excess per Vault (Satoshis)", labelpad=15)
+            axes[plot_num].set_title("Mean Excess per Vault")
+            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
@@ -748,11 +768,11 @@ class Simulation(object):
             df = DataFrame(self.overpayments, columns=["block", "overpayments"])
             df["cumulative"] = df["overpayments"].cumsum()
             df.set_index(["block"], inplace=True)
-            df["overpayments"].plot(ax=axes[plot_num], label="Singular", legend=True)
+            df["overpayments"].plot(ax=axes[plot_num], label="Singular", legend=True).legend(loc="upper left")
             ax2 = axes[plot_num].twinx()
             df["cumulative"].plot(
                 ax=ax2, label="Cumulative", color="orange", legend=True
-            )
+            ).legend(loc="upper right")
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_title("Cancel Fee Overpayments")
@@ -771,67 +791,52 @@ class Simulation(object):
             )
             plot_num += 1
 
-        if output is not None:
-            plt.savefig(f"{output}")
+        # Plot fb_coins_dist
+        if self.with_fb_coins_dist and self.fb_coins_dist != []:
+            for frame in self.fb_coins_dist:
+                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
+                df = DataFrame(tuples, columns=["Block", "amount"])
+                df.plot.scatter(
+                    x="Block",
+                    y="amount",
+                    style="-",
+                    alpha=1,
+                    s=10,
+                    ax=axes[plot_num],
+                    legend=False,
+                )
+                axes[plot_num].set_title("Fee-bump Coins Distribution")
+                axes[plot_num].set_ylabel("Satoshis", labelpad=15)
+                axes[plot_num].set_xlabel("Block", labelpad=15)
+            if self.Vm != []:
+                df = DataFrame(self.Vm, columns=["Block","Vm"])
+                df.set_index("Block", inplace=True)
+                df.plot(ax=axes[plot_num], legend=True)
+                axes[plot_num].legend(["$V_m$"])
 
-        plt.show()
+            plot_num += 1
+
+        figure.size = 5.4, plot_num*3.9
+
+
+        if output is not None:
+            plt.savefig(f"{output}.png")
+
+        if show:
+            plt.show()
 
         return report
 
-    def plot_strategic_values(
-        self, start_block, end_block, estimate_strat, reserve_strat, O_version
-    ):
+    def plot_fee_history(start_block, end_block, output=None, show=False):
+
         plt.style.use(["plot_style.txt"])
-
-        figure, axes = plt.subplots(3, 1, sharex=True)
-        self.wt.estimate_strat = estimate_strat
-        self.wt.reserve_strat = reserve_strat
-        self.wt.O_version = O_version
-
-        # Plot strategic values & estimateSmartFee history
-        rows = []
-        Os = []
-        for block in range(start_block, end_block):
-            if block % 1000 == 0:
-                logging.debug(f"Processing block {block}")
-                Os.append([block, self.wt.fb_coins_dist(block)])
-            rows.append(
-                [block, self.wt.Vm(block), self.wt.fee_reserve_per_vault(block)]
-            )
-
-        strategy_df = DataFrame(rows, columns=["Block", "Vm", "Required Reserve"])
-        strategy_df.set_index("Block", inplace=True)
-        strategy_df["Vm"].plot(ax=axes[0], title="Vm", legend=True)
-        strategy_df["Required Reserve"].plot(
-            ax=axes[0], title="Required Reserve", legend=True
-        )
-        axes[0].set_ylabel("Sats")
-        axes[0].set_title(
-            f"Strategic Values\nestimate_strat = {estimate_strat}\nreserve_strat = {reserve_strat})",
-            pad=15,
-        )
-
         # Plot fee history
         self.wt.feerate_df["MeanFeerate"][start_block:end_block].plot(ax=axes[1])
         axes[1].set_ylabel("Feerate (sats/vByte)")
         axes[1].set_title("Historic Feerates")
+ 
+        if output is not None:
+            plt.savefig(f"{output}")
 
-        # Plot amounts of fb_coins_dist(t)
-        for frame in Os:
-            tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-            Os_df = DataFrame(tuples, columns=["block", "amount"])
-            Os_df.plot.scatter(
-                x="block",
-                y="amount",
-                style="-",
-                alpha=1,
-                s=10,
-                ax=axes[2],
-                legend=False,
-            )
-            axes[2].set_title("O")
-            axes[2].set_ylabel("Coin Amount (Satoshis)", labelpad=15)
-            axes[2].set_xlabel("Block", labelpad=15)
-
-        plt.savefig("Results/StrategicValues.png")
-        # plt.show()
+        if show:
+            plt.show()
