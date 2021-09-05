@@ -13,7 +13,13 @@ import logging
 import numpy as np
 
 from pandas import read_csv
-from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, MAX_TX_SIZE
+from utils import (
+    TX_OVERHEAD_SIZE,
+    P2WPKH_INPUT_SIZE,
+    P2WPKH_OUTPUT_SIZE,
+    MAX_TX_SIZE,
+    CANCEL_TX_WEIGHT,
+)
 
 
 class StateMachine:
@@ -25,7 +31,6 @@ class StateMachine:
         n_man,
         hist_feerate_csv,
         estimatesmartfee_csv,
-        weights_csv,
         block_date_csv,
         reserve_strat,
         estimate_strat,
@@ -44,10 +49,6 @@ class StateMachine:
         self.estimate_smart_feerate_df = read_csv(
             estimatesmartfee_csv, parse_dates=True, index_col="DateTime"
         )
-
-        self.weights_df = read_csv(weights_csv, sep=";")
-        # Set (n_stk, n_man) as multiindex for weights dataframe that gives transaction size in WUs
-        self.weights_df.set_index(["n_stk", "n_man"], inplace=True)
 
         self.block_datetime_df = read_csv(block_date_csv, index_col="Block")
 
@@ -182,7 +183,7 @@ class StateMachine:
             feerate
             * (
                 int(
-                    self.weights_df[tx_type][self.n_stk, self.n_man]
+                    CANCEL_TX_WEIGHT[self.n_stk][self.n_man]
                     + n_fb_inputs * P2WPKH_INPUT_SIZE
                 )
                 / 4
