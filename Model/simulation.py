@@ -17,7 +17,16 @@ class Simulation(object):
 
     def __init__(
         self,
-        config,
+        n_stk,
+        n_man,
+        hist_feerate_csv,
+        estimatesmartfee_csv,
+        weights_csv,
+        block_date_csv,
+        reserve_strat,
+        estimate_strat,
+        o_version,
+        i_version,
         exp_active_vaults,
         refill_excess,
         refill_period,
@@ -46,7 +55,18 @@ class Simulation(object):
         self.catastrophe_rate = catastrophe_rate
 
         # WT state machine
-        self.wt = StateMachine(config)
+        self.wt = StateMachine(
+            n_stk,
+            n_man,
+            hist_feerate_csv,
+            estimatesmartfee_csv,
+            weights_csv,
+            block_date_csv,
+            reserve_strat,
+            estimate_strat,
+            o_version,
+            i_version,
+        )
         self.vault_count = 0
         self.vault_id = 0
 
@@ -78,7 +98,6 @@ class Simulation(object):
         # Simulation report
         self.report_init = f"""\
         Watchtower config:\n\
-        {config}\n\
         O_0_factor: {self.wt.O_0_factor}\n\
         O_1_factor: {self.wt.O_1_factor}\n\
         Refill excess: {self.refill_excess}\n\

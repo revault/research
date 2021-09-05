@@ -19,35 +19,45 @@ from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, MAX_T
 class StateMachine:
     """Watchtower state machine."""
 
-    def __init__(self, config):
-        self.n_stk = config["n_stk"]
-        self.n_man = config["n_man"]
+    def __init__(
+        self,
+        n_stk,
+        n_man,
+        hist_feerate_csv,
+        estimatesmartfee_csv,
+        weights_csv,
+        block_date_csv,
+        reserve_strat,
+        estimate_strat,
+        o_version,
+        i_version,
+    ):
+        self.n_stk = n_stk
+        self.n_man = n_man
         # vaults = [{"id": str, "amount": int, "fee_reserve": [fbcoin]}, ...]
         self.vaults = []
         # fbcoins = [{"idx": int, "amount": int, "allocation": Option<vaultID>, "processed": Option<block_num>}, ...]
         self.fbcoins = []
         self.fbcoin_count = 0
 
-        self.feerate_df = read_csv(config["feerate_src"], index_col="Block")
+        self.feerate_df = read_csv(hist_feerate_csv, index_col="Block")
         self.estimate_smart_feerate_df = read_csv(
-            config["estimate_smart_feerate_src"], parse_dates=True, index_col="DateTime"
+            estimatesmartfee_csv, parse_dates=True, index_col="DateTime"
         )
 
-        self.weights_df = read_csv(config["weights_src"], sep=";")
+        self.weights_df = read_csv(weights_csv, sep=";")
         # Set (n_stk, n_man) as multiindex for weights dataframe that gives transaction size in WUs
         self.weights_df.set_index(["n_stk", "n_man"], inplace=True)
 
-        self.block_datetime_df = read_csv(
-            config["block_datetime_src"], index_col="Block"
-        )
+        self.block_datetime_df = read_csv(block_date_csv, index_col="Block")
 
         # analysis strategy over historical feerates for fee_reserve
-        self.reserve_strat = config["reserve_strat"]
+        self.reserve_strat = reserve_strat
         # analysis strategy over historical feerates for Vm
-        self.estimate_strat = config["estimate_strat"]
+        self.estimate_strat = estimate_strat
 
-        self.O_version = config["O_version"]
-        self.I_version = config["I_version"]
+        self.O_version = o_version
+        self.I_version = i_version
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
