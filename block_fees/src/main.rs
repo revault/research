@@ -1,5 +1,6 @@
 use bitcoin::{blockdata::constants::WITNESS_SCALE_FACTOR, consensus::encode::VarInt};
 use blocks_iterator::Config;
+use chrono::NaiveDateTime;
 use structopt::StructOpt;
 
 use std::{fs, io::Write, process, sync::mpsc::sync_channel};
@@ -72,7 +73,7 @@ fn main() {
         if fees.len() == 0 {
             write!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 block.height,
                 block.block_hash,
                 block.block.header.difficulty(network),
@@ -85,6 +86,7 @@ fn main() {
                 "NA",
                 "NA",
                 "NA",
+                NaiveDateTime::from_timestamp(block.block.header.time as i64, 0),
             )
             .unwrap_or_else(|e| {
                 eprintln!("Error writing to file: {}", e);
@@ -93,7 +95,7 @@ fn main() {
         } else {
             write!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 block.height,
                 block.block_hash,
                 block.block.header.difficulty(network),
@@ -106,6 +108,7 @@ fn main() {
                 median(&feerates),
                 feerates[0],
                 feerates[feerates.len() - 1],
+                NaiveDateTime::from_timestamp(block.block.header.time as i64, 0)
             )
             .unwrap_or_else(|e| {
                 eprintln!("Error writing to file: {}", e);
