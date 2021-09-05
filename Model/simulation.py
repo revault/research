@@ -98,7 +98,7 @@ class Simulation(object):
         num_vaults = len(self.wt.vaults)
         return num_vaults * required_reserve_per_vault
 
-    def amount_needed(self, block_height):
+    def amount_needed(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
         Used by stakeholder wallet software.
         R(t) in the paper.
@@ -109,8 +109,8 @@ class Simulation(object):
         bal = self.wt.balance()
         frpv = self.wt.fee_reserve_per_vault(block_height)
         reserve_total = frpv * (
-            self.EXPECTED_ACTIVE_VAULTS + self.REFILL_EXCESS
-        )  # Should really be len(self.wt.vaults) not EXPECTED_ACTIVE_VAULTS but then initialise sequence wouldn't work
+            expected_new_vaults + len(self.wt.vaults) + self.REFILL_EXCESS
+        )
         R = reserve_total - bal
         if R <= 0:
             return 0
@@ -138,7 +138,7 @@ class Simulation(object):
     def initialize_sequence(self, block_height):
         logging.debug(f"Initialize sequence at block {block_height}")
         # Refill transition
-        refill_amount = self.amount_needed(block_height)
+        refill_amount = self.amount_needed(block_height, self.EXPECTED_ACTIVE_VAULTS)
         if refill_amount <= 0:
             logging.debug(f"  Refill not required, WT has enough bitcoin")
         else:
@@ -202,7 +202,7 @@ class Simulation(object):
             self.vault_excess_after_delegation.append([block_height, excesses])
 
     def refill_sequence(self, block_height):
-        refill_amount = self.amount_needed(block_height)
+        refill_amount = self.amount_needed(block_height, 0)
         if refill_amount > 0:
             logging.debug(f"Refill sequence at block {block_height}")
             # Refill transition

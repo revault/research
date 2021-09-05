@@ -44,5 +44,5 @@ if __name__ == "__main__":
     logging.info(f"Report\n{report}")
 
     if REPORT_FILENAME is not None:
-        with open(REPORT_FILENAME, "w+", encoding="utf-8") as f:
+        with open(f"{REPORT_FILENAME}.txt", "w+", encoding="utf-8") as f:
             f.write(report)
