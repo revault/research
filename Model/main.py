@@ -1,7 +1,11 @@
 import logging
+import os
 import random
 
 from simulation import Simulation
+
+REPORT_FILENAME = os.getenv("REPORT_FILENAME", None)
+PLOT_FILENAME = os.getenv("PLOT_FILENAME", None)
 
 if __name__ == "__main__":
     random.seed(21000000)
@@ -36,12 +40,12 @@ if __name__ == "__main__":
     end_block = 681000
 
     sim.run(start_block, end_block)
-    report = sim.plot()
+    report = sim.plot(PLOT_FILENAME)
     logging.info(f"Report\n{report}")
 
-    # FIXME: not portable! Should probably be a command line config!
-    with open("Results/TestReport.txt", "w+", encoding="utf-8") as f:
-        f.write(report)
+    if REPORT_FILENAME is not None:
+        with open(REPORT_FILENAME, "w+", encoding="utf-8") as f:
+            f.write(report)
 
     sim.plot_strategic_values(
         start_block, end_block, "ME30", "CUMMAX95Q90", O_version=1
