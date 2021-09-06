@@ -71,7 +71,7 @@ class Simulation(object):
         self.wt_risk_time = []
         self.with_fb_coins_dist = with_fb_coins_dist
         self.fb_coins_dist = []
-        self.Vm = []
+        self.vm_values = []
 
         # FIXME: return report, don't write it here
         # Simulation report
@@ -472,7 +472,7 @@ class Simulation(object):
                 if block % 1000 == 0:
                     self.fb_coins_dist.append(
                         [block, self.wt.fb_coins_dist(block)])
-                self.Vm.append([block, self.wt.Vm(block)])
+                self.vm_values.append([block, self.wt.Vm(block)])
 
     def plot(self, output=None, show=False):
         """Plot info about the simulation stored according to configuration.
@@ -823,8 +823,8 @@ class Simulation(object):
                 axes[plot_num].set_title("Fee-bump Coins Distribution")
                 axes[plot_num].set_ylabel("Satoshis", labelpad=15)
                 axes[plot_num].set_xlabel("Block", labelpad=15)
-            if self.Vm != []:
-                df = DataFrame(self.Vm, columns=["Block", "Vm"])
+            if self.vm_values != []:
+                df = DataFrame(self.vm_values, columns=["Block", "Vm"])
                 df.set_index("Block", inplace=True)
                 df.plot(ax=axes[plot_num], legend=True)
                 axes[plot_num].legend(["$V_m$"])
