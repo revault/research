@@ -17,7 +17,19 @@ class Simulation(object):
 
     def __init__(
         self,
-        config,
+        n_stk,
+        n_man,
+        hist_feerate_csv,
+        reserve_strat,
+        estimate_strat,
+        o_version,
+        i_version,
+        exp_active_vaults,
+        refill_excess,
+        refill_period,
+        delegation_period,
+        invalid_spend_rate,
+        catastrophe_rate,
         with_balance=False,
         with_vault_excess=False,
         with_op_cost=False,
@@ -29,18 +41,26 @@ class Simulation(object):
         with_risk_time=False,
     ):
         # Stakeholder parameters
-        self.EXPECTED_ACTIVE_VAULTS = 5  # Units: fee reserve per vault
+        self.expected_active_vaults = exp_active_vaults
         # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
-        self.REFILL_EXCESS = 3 * self.EXPECTED_ACTIVE_VAULTS
-        self.REFILL_PERIOD = 144 * 7
-        self.DELEGATION_PERIOD = 144
+        self.refill_excess = refill_excess
+        self.refill_period = refill_period
+        self.delegation_period = delegation_period
 
         # Manager parameters
-        self.INVALID_SPEND_RATE = 0.1
-        self.CATASTROPHE_RATE = 0.005
+        self.invalid_spend_rate = invalid_spend_rate
+        self.catastrophe_rate = catastrophe_rate
 
         # WT state machine
-        self.wt = StateMachine(config)
+        self.wt = StateMachine(
+            n_stk,
+            n_man,
+            hist_feerate_csv,
+            reserve_strat,
+            estimate_strat,
+            o_version,
+            i_version,
+        )
         self.vault_count = 0
         self.vault_id = 0
 
@@ -69,19 +89,17 @@ class Simulation(object):
         self.with_risk_time = with_risk_time
         self.wt_risk_time = []
 
-        # FIXME: return report, don't write it here
         # Simulation report
         self.report_init = f"""\
         Watchtower config:\n\
-        {config}\n\
         O_0_factor: {self.wt.O_0_factor}\n\
         O_1_factor: {self.wt.O_1_factor}\n\
-        Refill excess: {self.REFILL_EXCESS}\n\
-        Expected active vaults: {self.EXPECTED_ACTIVE_VAULTS}\n\
-        Refill period: {self.REFILL_PERIOD}\n\
-        Delegation period: {self.DELEGATION_PERIOD}\n\
-        Invalid spend rate: {self.INVALID_SPEND_RATE}\n\
-        Catastrophe rate: {self.CATASTROPHE_RATE}\n\
+        Refill excess: {self.refill_excess}\n\
+        Expected active vaults: {self.expected_active_vaults}\n\
+        Refill period: {self.refill_period}\n\
+        Delegation period: {self.delegation_period}\n\
+        Invalid spend rate: {self.invalid_spend_rate}\n\
+        Catastrophe rate: {self.catastrophe_rate}\n\
         """
 
     def new_vault_id(self):
@@ -99,14 +117,14 @@ class Simulation(object):
         Used by stakeholder wallet software.
         R(t) in the paper.
 
-        Note: stakeholder knows WT's balance and num_vaults (or EXPECTED_ACTIVE_VAULTS).
+        Note: stakeholder knows WT's balance and num_vaults (or expected_active_vaults).
               Stakeholder doesn't know which coins are allocated or not.
         """
         bal = self.wt.balance()
         frpv = self.wt.fee_reserve_per_vault(block_height)
         reserve_total = frpv * (
-            self.EXPECTED_ACTIVE_VAULTS + self.REFILL_EXCESS
-        )  # Should really be len(self.wt.vaults) not EXPECTED_ACTIVE_VAULTS but then initialise sequence wouldn't work
+            self.expected_active_vaults + self.refill_excess
+        )  # Should really be len(self.wt.vaults) not expected_active_vaults but then initialise sequence wouldn't work
         R = reserve_total - bal
         if R <= 0:
             return 0
@@ -179,7 +197,7 @@ class Simulation(object):
                 self.pool_after_cf.append([block_height, amounts])
 
         # Allocation transitions
-        for i in range(0, self.EXPECTED_ACTIVE_VAULTS):
+        for i in range(0, self.expected_active_vaults):
             amount = 10e10  # 100 BTC
             self.wt.allocate(self.new_vault_id(), amount, block_height)
             self.vault_count += 1
@@ -377,15 +395,15 @@ class Simulation(object):
             try:
                 # Refill sequence spans 8 blocks, musn't begin another sequence
                 # with period shorter than that.
-                if block % self.REFILL_PERIOD == 0:  # once per refill period
+                if block % self.refill_period == 0:  # once per refill period
                     self.refill_sequence(block)
 
-                # Fixme: assumes self.DELEGATION_PERIOD > 20
+                # Fixme: assumes self.delegation_period > 20
                 if (
-                    block % self.DELEGATION_PERIOD == 20
+                    block % self.delegation_period == 20
                 ):  # once per delegation period on the 20th block
                     # generate invalid spend, requires cancel
-                    if random.random() < self.INVALID_SPEND_RATE:
+                    if random.random() < self.invalid_spend_rate:
                         self.cancel_sequence(block)
 
                     # generate valid spend, requires processing
@@ -393,7 +411,7 @@ class Simulation(object):
                         self.spend_sequence(block)
 
                 if block % 144 == 70:  # once per day on the 70th block
-                    if random.random() < self.CATASTROPHE_RATE:
+                    if random.random() < self.catastrophe_rate:
                         self.catastrophe_sequence(block)
 
                         # Reboot operation after catastrophe
@@ -679,7 +697,7 @@ class Simulation(object):
             vault_excess_after_cf = []
             for frame in self.vault_excess_after_cf:
                 vault_excess_after_cf.append(
-                    (frame[0], sum(frame[1]) / self.EXPECTED_ACTIVE_VAULTS)
+                    (frame[0], sum(frame[1]) / self.expected_active_vaults)
                 )
             excesses_df = DataFrame(
                 vault_excess_after_cf, columns=["block", "After CF"]
@@ -690,7 +708,7 @@ class Simulation(object):
             vault_excess_after_delegation = []
             for frame in self.vault_excess_after_delegation:
                 vault_excess_after_delegation.append(
-                    (frame[0], sum(frame[1]) / self.EXPECTED_ACTIVE_VAULTS)
+                    (frame[0], sum(frame[1]) / self.expected_active_vaults)
                 )
             excesses_df = DataFrame(
                 vault_excess_after_delegation, columns=["block", "After delegation"]
@@ -705,7 +723,7 @@ class Simulation(object):
             vault_excess_before_cf = []
             for frame in self.vault_excess_before_cf:
                 vault_excess_before_cf.append(
-                    (frame[0], sum(frame[1]) / self.EXPECTED_ACTIVE_VAULTS)
+                    (frame[0], sum(frame[1]) / self.expected_active_vaults)
                 )
             excesses_df = DataFrame(
                 vault_excess_before_cf, columns=["block", "Before CF"]

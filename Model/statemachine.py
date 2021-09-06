@@ -13,51 +13,53 @@ import logging
 import numpy as np
 
 from pandas import read_csv
-from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, MAX_TX_SIZE
+from utils import (
+    TX_OVERHEAD_SIZE,
+    P2WPKH_INPUT_SIZE,
+    P2WPKH_OUTPUT_SIZE,
+    MAX_TX_SIZE,
+    CANCEL_TX_WEIGHT,
+)
 
 
 class StateMachine:
     """Watchtower state machine."""
 
-    def __init__(self, config):
-        self.n_stk = config["n_stk"]
-        self.n_man = config["n_man"]
+    def __init__(
+        self,
+        n_stk,
+        n_man,
+        hist_feerate_csv,
+        reserve_strat,
+        estimate_strat,
+        o_version,
+        i_version,
+    ):
+        self.n_stk = n_stk
+        self.n_man = n_man
         # vaults = [{"id": str, "amount": int, "fee_reserve": [fbcoin]}, ...]
         self.vaults = []
         # fbcoins = [{"idx": int, "amount": int, "allocation": Option<vaultID>, "processed": Option<block_num>}, ...]
         self.fbcoins = []
         self.fbcoin_count = 0
 
-        self.feerate_df = read_csv(config["feerate_src"], index_col="Block")
-        self.estimate_smart_feerate_df = read_csv(
-            config["estimate_smart_feerate_src"], parse_dates=True, index_col="DateTime"
-        )
-
-        self.weights_df = read_csv(config["weights_src"], sep=";")
-        # Set (n_stk, n_man) as multiindex for weights dataframe that gives transaction size in WUs
-        self.weights_df.set_index(["n_stk", "n_man"], inplace=True)
-
-        self.block_datetime_df = read_csv(
-            config["block_datetime_src"], index_col="Block"
+        self.hist_df = read_csv(
+            hist_feerate_csv, parse_dates=True, index_col="block_height"
         )
 
         # analysis strategy over historical feerates for fee_reserve
-        self.reserve_strat = config["reserve_strat"]
+        self.reserve_strat = reserve_strat
         # analysis strategy over historical feerates for Vm
-        self.estimate_strat = config["estimate_strat"]
+        self.estimate_strat = estimate_strat
 
-        self.O_version = config["O_version"]
-        self.I_version = config["I_version"]
+        self.O_version = o_version
+        self.I_version = i_version
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
 
         # avoid unnecessary search by caching fee reserve per vault
         self.frpv = (None, None)  # block, value
-
-    def _get_block_datetime(self, block_num):
-        """Return datetime associated with given block number."""
-        return self.block_datetime_df["DateTime"][block_num]
 
     def _remove_coin(self, coin):
         self.fbcoins.remove(coin)
@@ -75,16 +77,9 @@ class StateMachine:
         #         break # Coin is unique, stop looping once found and removed
 
     def _estimate_smart_feerate(self, block_height):
-        # Simulator provides current block_height. Data source for estimateSmartFee indexed by datetime.
-        # Convert block_height to datetime and find the previous (using 'ffill') datum for associated
-        # block_height.
-        target = "block1-2"
-        datetime = self._get_block_datetime(block_height)
-        loc = self.estimate_smart_feerate_df.index.get_loc(
-            key=datetime, method="ffill", tolerance="0000-00-00 04:00:00"
-        )
+        # FIXME: why always 1-2 ??
         # If data isnan or less than or equal to 0, return value error
-        estimate = self.estimate_smart_feerate_df[f"{target}"][loc]
+        estimate = self.hist_df["Est 1block"][block_height]
         if np.isnan(estimate) or (estimate <= 0):
             raise (
                 ValueError(f"No estimate smart feerate data at block {block_height}")
@@ -103,22 +98,22 @@ class StateMachine:
         else:
             thirtyD = 144 * 30  # 30 days in blocks
             ninetyD = 144 * 90  # 90 days in blocks
-            if self.reserve_strat not in self.feerate_df:
+            if self.reserve_strat not in self.hist_df:
                 if self.reserve_strat == "95Q30":
-                    self.feerate_df["95Q30"] = (
-                        self.feerate_df["MeanFeerate"]
+                    self.hist_df["95Q30"] = (
+                        self.hist_df["mean_feerate"]
                         .rolling(thirtyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                     )
                 elif self.reserve_strat == "95Q90":
-                    self.feerate_df["95Q90"] = (
-                        self.feerate_df["MeanFeerate"]
+                    self.hist_df["95Q90"] = (
+                        self.hist_df["mean_feerate"]
                         .rolling(ninetyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                     )
                 elif self.reserve_strat == "CUMMAX95Q90":
-                    self.feerate_df["CUMMAX95Q90"] = (
-                        self.feerate_df["MeanFeerate"]
+                    self.hist_df["CUMMAX95Q90"] = (
+                        self.hist_df["mean_feerate"]
                         .rolling(ninetyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                         .cummax()
@@ -128,7 +123,7 @@ class StateMachine:
 
             self.frpv = (
                 block_height,
-                self.feerate_df[self.reserve_strat][block_height],
+                self.hist_df[self.reserve_strat][block_height],
             )
             return self.frpv[1]
 
@@ -138,24 +133,24 @@ class StateMachine:
         chosen with the self.estimate_strat parameter.
         """
         thirtyD = 144 * 30  # 30 days in blocks
-        if self.estimate_strat not in self.feerate_df:
+        if self.estimate_strat not in self.hist_df:
             if self.estimate_strat == "MA30":
-                self.feerate_df["MA30"] = (
-                    self.feerate_df["MeanFeerate"]
+                self.hist_df["MA30"] = (
+                    self.hist_df["mean_feerate"]
                     .rolling(thirtyD, min_periods=144)
                     .mean()
                 )
 
             elif self.estimate_strat == "ME30":
-                self.feerate_df["ME30"] = (
-                    self.feerate_df["MeanFeerate"]
+                self.hist_df["ME30"] = (
+                    self.hist_df["mean_feerate"]
                     .rolling(thirtyD, min_periods=144)
                     .median()
                 )
             else:
                 raise ValueError("Strategy not implemented")
 
-        return self.feerate_df[self.estimate_strat][block_height]
+        return self.hist_df[self.estimate_strat][block_height]
 
     def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
         """Convert feerate (satoshi/vByte) into transaction fee (satoshi).
@@ -172,8 +167,8 @@ class StateMachine:
             feerate
             * (
                 int(
-                    self.weights_df[tx_type][self.n_stk, self.n_man]
-                    + n_fb_inputs * self.weights_df["feebump"][self.n_stk, self.n_man]
+                    CANCEL_TX_WEIGHT[self.n_stk][self.n_man]
+                    + n_fb_inputs * P2WPKH_INPUT_SIZE
                 )
                 / 4
             ),
@@ -193,7 +188,9 @@ class StateMachine:
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
         feerate = self._feerate(block_height)
-        Vm = self._feerate_to_fee(feerate, "cancel", 0) + feerate * (272.0 / 4)
+        Vm = self._feerate_to_fee(feerate, "cancel", 0) + feerate * (
+            float(P2WPKH_INPUT_SIZE) / 4
+        )
         if Vm <= 0:
             raise ValueError(
                 f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
@@ -205,7 +202,9 @@ class StateMachine:
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
         t1 = (reserve - self.Vm(block_height)) / self.O_0_factor
-        t2 = reserve_rate * (272.0 / 4) + self._feerate_to_fee(10, "cancel", 0)
+        t2 = reserve_rate * (float(P2WPKH_INPUT_SIZE) / 4) + self._feerate_to_fee(
+            10, "cancel", 0
+        )
         return max(t1, t2)
 
     def fb_coins_dist(self, block_height):
@@ -264,7 +263,9 @@ class StateMachine:
         """
         # FIXME: What is a reasonable factor of a 'negligible coin'?
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * (272.0 / 4) + self._feerate_to_fee(10, "cancel", 0)
+        t1 = reserve_rate * (float(P2WPKH_INPUT_SIZE) / 4) + self._feerate_to_fee(
+            10, "cancel", 0
+        )
         t2 = self.Vm(block_height)
         minimum = min(t1, t2)
         if coin["amount"] <= minimum:

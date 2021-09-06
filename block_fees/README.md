@@ -10,7 +10,7 @@ cargo run --release -- --blocks-dir ~/.bitcoin/blocks/ --network bitcoin
 
 This will write to a [`historical_fees.csv`](historical_fees.csv) file the following data:
 ```
-Block height, Block hash, Difficulty, Block Weight, Mean fee, Median fee, Min fee, Max fee, Mean fee, Median fee, Min fee, Max fee
+Block height, Block hash, Difficulty, Block Weight, Mean fee, Median fee, Min fee, Max fee, Mean fee, Median fee, Min fee, Max fee, Block time (as human readable date)
 ```
 
 This excludes the coinbase transaction for fees data, and will print `NA` instead when there is no

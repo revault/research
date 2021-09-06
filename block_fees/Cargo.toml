@@ -12,3 +12,6 @@ blocks_iterator = "0.2.0"
 structopt = "0.3.21"
 
 bitcoin = "0.26.0"
+
+# Needed to display timestamp as a date
+chrono = "0.4.19"
