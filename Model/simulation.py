@@ -863,7 +863,7 @@ class Simulation(object):
 
         plt.style.use(["plot_style.txt"])
         # Plot fee history
-        self.wt.feerate_df["MeanFeerate"][start_block:end_block].plot(
+        self.wt.feerate_df["mean_feerate"][start_block:end_block].plot(
             ax=axes[1])
         axes[1].set_ylabel("Feerate (sats/vByte)")
         axes[1].set_title("Historic Feerates")
