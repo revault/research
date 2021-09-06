@@ -76,7 +76,7 @@ if __name__ == "__main__":
     end_block = 681000
 
     sim.run(start_block, end_block)
-    report = sim.plot(PLOT_FILENAME)
+    report = sim.plot(PLOT_FILENAME, True)
     logging.info(f"Report\n{report}")
 
     if REPORT_FILENAME is not None:
