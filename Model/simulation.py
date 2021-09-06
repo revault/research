@@ -519,7 +519,7 @@ class Simulation(object):
                 self.with_fb_coins_dist,
             ]
         )
-        figure, axes = plt.subplots(subplots_len, 1, sharex=True)
+        figure, axes = plt.subplots(subplots_len, 1, sharex=True, figsize=(5.4, subplots_len * 3.9))
         plot_num = 0
 
         # Plot WT balance vs total required reserve
@@ -850,8 +850,6 @@ class Simulation(object):
 
             plot_num += 1
 
-        figure.size = 5.4, plot_num * 3.9
-
         if output is not None:
             plt.savefig(f"{output}.png")
 
@@ -860,16 +858,17 @@ class Simulation(object):
 
         return report
 
-    def plot_fee_history(start_block, end_block, output=None, show=False):
+    def plot_fee_history(self, start_block, end_block, output=None, show=False):
 
         plt.style.use(["plot_style.txt"])
-        # Plot fee history
-        self.wt.feerate_df["mean_feerate"][start_block:end_block].plot(ax=axes[1])
-        axes[1].set_ylabel("Feerate (sats/vByte)")
-        axes[1].set_title("Historic Feerates")
+        fig = self.wt.hist_df["mean_feerate"][start_block:end_block].plot()
+        plt.title("Feerate History")
+        plt.xlabel("Block", labelpad=15)
+        plt.ylabel("Feerate (sats/vByte)", labelpad=15)
+        fig.size = 3,7
 
         if output is not None:
-            plt.savefig(f"{output}")
+            plt.savefig(f"{output}.png")
 
         if show:
             plt.show()

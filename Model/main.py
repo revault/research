@@ -76,9 +76,12 @@ if __name__ == "__main__":
     end_block = 681000
 
     sim.run(start_block, end_block)
+
     report = sim.plot(PLOT_FILENAME, True)
     logging.info(f"Report\n{report}")
 
     if REPORT_FILENAME is not None:
         with open(f"{REPORT_FILENAME}.txt", "w+", encoding="utf-8") as f:
             f.write(report)
+
+    # sim.plot_fee_history(start_block,end_block, PLOT_FILENAME, True)
