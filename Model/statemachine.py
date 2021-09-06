@@ -30,8 +30,6 @@ class StateMachine:
         n_stk,
         n_man,
         hist_feerate_csv,
-        estimatesmartfee_csv,
-        block_date_csv,
         reserve_strat,
         estimate_strat,
         o_version,
@@ -45,12 +43,7 @@ class StateMachine:
         self.fbcoins = []
         self.fbcoin_count = 0
 
-        self.feerate_df = read_csv(hist_feerate_csv, index_col="Block")
-        self.estimate_smart_feerate_df = read_csv(
-            estimatesmartfee_csv, parse_dates=True, index_col="DateTime"
-        )
-
-        self.block_datetime_df = read_csv(block_date_csv, index_col="Block")
+        self.feerate_df = read_csv(hist_feerate_csv, parse_dates=True, index_col="block_height")
 
         # analysis strategy over historical feerates for fee_reserve
         self.reserve_strat = reserve_strat
@@ -65,10 +58,6 @@ class StateMachine:
 
         # avoid unnecessary search by caching fee reserve per vault
         self.frpv = (None, None)  # block, value
-
-    def _get_block_datetime(self, block_num):
-        """Return datetime associated with given block number."""
-        return self.block_datetime_df["DateTime"][block_num]
 
     def _remove_coin(self, coin):
         self.fbcoins.remove(coin)
@@ -86,16 +75,9 @@ class StateMachine:
         #         break # Coin is unique, stop looping once found and removed
 
     def _estimate_smart_feerate(self, block_height):
-        # Simulator provides current block_height. Data source for estimateSmartFee indexed by datetime.
-        # Convert block_height to datetime and find the previous (using 'ffill') datum for associated
-        # block_height.
-        target = "block1-2"
-        datetime = self._get_block_datetime(block_height)
-        loc = self.estimate_smart_feerate_df.index.get_loc(
-            key=datetime, method="ffill", tolerance="0000-00-00 04:00:00"
-        )
+        # FIXME: why always 1-2 ??
         # If data isnan or less than or equal to 0, return value error
-        estimate = self.estimate_smart_feerate_df[f"{target}"][loc]
+        estimate = self.feerate_df["Est 1block"][block_height]
         if np.isnan(estimate) or (estimate <= 0):
             raise (
                 ValueError(f"No estimate smart feerate data at block {block_height}")
@@ -117,19 +99,19 @@ class StateMachine:
             if self.reserve_strat not in self.feerate_df:
                 if self.reserve_strat == "95Q30":
                     self.feerate_df["95Q30"] = (
-                        self.feerate_df["MeanFeerate"]
+                        self.feerate_df["mean_feerate"]
                         .rolling(thirtyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                     )
                 elif self.reserve_strat == "95Q90":
                     self.feerate_df["95Q90"] = (
-                        self.feerate_df["MeanFeerate"]
+                        self.feerate_df["mean_feerate"]
                         .rolling(ninetyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                     )
                 elif self.reserve_strat == "CUMMAX95Q90":
                     self.feerate_df["CUMMAX95Q90"] = (
-                        self.feerate_df["MeanFeerate"]
+                        self.feerate_df["mean_feerate"]
                         .rolling(ninetyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                         .cummax()
@@ -152,14 +134,14 @@ class StateMachine:
         if self.estimate_strat not in self.feerate_df:
             if self.estimate_strat == "MA30":
                 self.feerate_df["MA30"] = (
-                    self.feerate_df["MeanFeerate"]
+                    self.feerate_df["mean_feerate"]
                     .rolling(thirtyD, min_periods=144)
                     .mean()
                 )
 
             elif self.estimate_strat == "ME30":
                 self.feerate_df["ME30"] = (
-                    self.feerate_df["MeanFeerate"]
+                    self.feerate_df["mean_feerate"]
                     .rolling(thirtyD, min_periods=144)
                     .median()
                 )
