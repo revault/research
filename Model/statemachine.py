@@ -176,14 +176,9 @@ class StateMachine:
         )
 
     def fee_reserve_per_vault(self, block_height):
-        reserve = self._feerate_to_fee(
+        return self._feerate_to_fee(
             self._feerate_reserve_per_vault(block_height), "cancel", 0
         )
-        Vm = self.Vm(block_height)
-        # FIXME: Is buf_factor necessary? Consider the excess for re-fills and
-        # the guarantees for the output set of the CF Txs
-        buf_factor = 1
-        return max(reserve, Vm)
 
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
