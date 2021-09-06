@@ -43,7 +43,9 @@ class StateMachine:
         self.fbcoins = []
         self.fbcoin_count = 0
 
-        self.feerate_df = read_csv(hist_feerate_csv, parse_dates=True, index_col="block_height")
+        self.hist_df = read_csv(
+            hist_feerate_csv, parse_dates=True, index_col="block_height"
+        )
 
         # analysis strategy over historical feerates for fee_reserve
         self.reserve_strat = reserve_strat
@@ -77,7 +79,7 @@ class StateMachine:
     def _estimate_smart_feerate(self, block_height):
         # FIXME: why always 1-2 ??
         # If data isnan or less than or equal to 0, return value error
-        estimate = self.feerate_df["Est 1block"][block_height]
+        estimate = self.hist_df["Est 1block"][block_height]
         if np.isnan(estimate) or (estimate <= 0):
             raise (
                 ValueError(f"No estimate smart feerate data at block {block_height}")
@@ -96,22 +98,22 @@ class StateMachine:
         else:
             thirtyD = 144 * 30  # 30 days in blocks
             ninetyD = 144 * 90  # 90 days in blocks
-            if self.reserve_strat not in self.feerate_df:
+            if self.reserve_strat not in self.hist_df:
                 if self.reserve_strat == "95Q30":
-                    self.feerate_df["95Q30"] = (
-                        self.feerate_df["mean_feerate"]
+                    self.hist_df["95Q30"] = (
+                        self.hist_df["mean_feerate"]
                         .rolling(thirtyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                     )
                 elif self.reserve_strat == "95Q90":
-                    self.feerate_df["95Q90"] = (
-                        self.feerate_df["mean_feerate"]
+                    self.hist_df["95Q90"] = (
+                        self.hist_df["mean_feerate"]
                         .rolling(ninetyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                     )
                 elif self.reserve_strat == "CUMMAX95Q90":
-                    self.feerate_df["CUMMAX95Q90"] = (
-                        self.feerate_df["mean_feerate"]
+                    self.hist_df["CUMMAX95Q90"] = (
+                        self.hist_df["mean_feerate"]
                         .rolling(ninetyD, min_periods=144)
                         .quantile(quantile=0.95, interpolation="linear")
                         .cummax()
@@ -121,7 +123,7 @@ class StateMachine:
 
             self.frpv = (
                 block_height,
-                self.feerate_df[self.reserve_strat][block_height],
+                self.hist_df[self.reserve_strat][block_height],
             )
             return self.frpv[1]
 
@@ -131,24 +133,24 @@ class StateMachine:
         chosen with the self.estimate_strat parameter.
         """
         thirtyD = 144 * 30  # 30 days in blocks
-        if self.estimate_strat not in self.feerate_df:
+        if self.estimate_strat not in self.hist_df:
             if self.estimate_strat == "MA30":
-                self.feerate_df["MA30"] = (
-                    self.feerate_df["mean_feerate"]
+                self.hist_df["MA30"] = (
+                    self.hist_df["mean_feerate"]
                     .rolling(thirtyD, min_periods=144)
                     .mean()
                 )
 
             elif self.estimate_strat == "ME30":
-                self.feerate_df["ME30"] = (
-                    self.feerate_df["mean_feerate"]
+                self.hist_df["ME30"] = (
+                    self.hist_df["mean_feerate"]
                     .rolling(thirtyD, min_periods=144)
                     .median()
                 )
             else:
                 raise ValueError("Strategy not implemented")
 
-        return self.feerate_df[self.estimate_strat][block_height]
+        return self.hist_df[self.estimate_strat][block_height]
 
     def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
         """Convert feerate (satoshi/vByte) into transaction fee (satoshi).
