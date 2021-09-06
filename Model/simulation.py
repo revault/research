@@ -94,7 +94,8 @@ class Simulation(object):
 
     def required_reserve(self, block_height):
         """The amount the WT should have in reserve based on the number of active vaults"""
-        required_reserve_per_vault = self.wt.fee_reserve_per_vault(block_height)
+        required_reserve_per_vault = self.wt.fee_reserve_per_vault(
+            block_height)
         num_vaults = len(self.wt.vaults)
         return num_vaults * required_reserve_per_vault
 
@@ -122,10 +123,10 @@ class Simulation(object):
             feerate = self.wt._estimate_smart_feerate(block_height)
         except (ValueError, KeyError):
             feerate = self.wt._feerate(block_height)
-        expected_num_outputs = len(self.wt.fb_coins_dist(block_height)) * new_reserves
-        expected_num_inputs = len(self.wt.fb_coins_dist(block_height)) * len(
-            self.wt.vaults
-        )
+        expected_num_outputs = len(
+            self.wt.fb_coins_dist(block_height)) * new_reserves
+        # just incase all coins are slected, plus the new refill output
+        expected_num_inputs = len(self.wt.fbcoins) + 1 
         expected_cf_fee = (
             TX_OVERHEAD_SIZE
             + expected_num_outputs * P2WPKH_OUTPUT_SIZE
@@ -138,7 +139,8 @@ class Simulation(object):
     def initialize_sequence(self, block_height):
         logging.debug(f"Initialize sequence at block {block_height}")
         # Refill transition
-        refill_amount = self.amount_needed(block_height, self.EXPECTED_ACTIVE_VAULTS)
+        refill_amount = self.amount_needed(
+            block_height, self.EXPECTED_ACTIVE_VAULTS)
         if refill_amount <= 0:
             logging.debug(f"  Refill not required, WT has enough bitcoin")
         else:
@@ -149,7 +151,8 @@ class Simulation(object):
 
             # Track operational costs
             try:
-                self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
+                self.refill_fee = 109.5 * \
+                    self.wt._estimate_smart_feerate(block_height)
             except (ValueError, KeyError):
                 self.refill_fee = 109.5 * self.wt._feerate(block_height)
 
@@ -212,7 +215,8 @@ class Simulation(object):
             self.wt.refill(refill_amount)
 
             try:
-                self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
+                self.refill_fee = 109.5 * \
+                    self.wt._estimate_smart_feerate(block_height)
             except (ValueError, KeyError):
                 self.refill_fee = 109.5 * self.wt._feerate(block_height)
 
@@ -466,9 +470,9 @@ class Simulation(object):
 
             if self.with_fb_coins_dist:
                 if block % 1000 == 0:
-                    self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
+                    self.fb_coins_dist.append(
+                        [block, self.wt.fb_coins_dist(block)])
                 self.Vm.append([block, self.wt.Vm(block)])
-
 
     def plot(self, output=None, show=False):
         """Plot info about the simulation stored according to configuration.
@@ -511,7 +515,8 @@ class Simulation(object):
         costs_df = None
         if self.costs != []:
             costs_df = DataFrame(
-                self.costs, columns=["block", "Refill Fee", "CF Fee", "Cancel Fee"]
+                self.costs, columns=[
+                    "block", "Refill Fee", "CF Fee", "Cancel Fee"]
             )
             report += f"Refill operations: {costs_df['Refill Fee'].count()}\n"
 
@@ -563,7 +568,8 @@ class Simulation(object):
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve
             for (risk_on, risk_off) in self.wt_risk_time:
-                axes[plot_num].axvspan(risk_off, risk_on, color="red", alpha=0.25)
+                axes[plot_num].axvspan(
+                    risk_off, risk_on, color="red", alpha=0.25)
 
             report += f"Analysis time span: {self.start_block} to {self.end_block}\n"
             risk_time = 0
@@ -712,7 +718,8 @@ class Simulation(object):
                     (frame[0], sum(frame[1]) / self.EXPECTED_ACTIVE_VAULTS)
                 )
             excesses_df = DataFrame(
-                vault_excess_after_delegation, columns=["block", "After delegation"]
+                vault_excess_after_delegation, columns=[
+                    "block", "After delegation"]
             )
             excesses_df.plot.scatter(
                 x="block",
@@ -765,14 +772,22 @@ class Simulation(object):
 
         # Plot overpayments
         if self.with_overpayments and self.overpayments != []:
-            df = DataFrame(self.overpayments, columns=["block", "overpayments"])
+            df = DataFrame(self.overpayments, columns=[
+                           "block", "overpayments"])
             df["cumulative"] = df["overpayments"].cumsum()
+            df.plot(ax=axes[plot_num], 
+                    x="block",
+                    y="overpayments",
+                    color="k",
+                    alpha=0.5,
+                    kind="scatter",
+                    label="Single",
+                    legend=True).legend(loc="center left")
             df.set_index(["block"], inplace=True)
-            df["overpayments"].plot(ax=axes[plot_num], label="Singular", legend=True).legend(loc="upper left")
             ax2 = axes[plot_num].twinx()
             df["cumulative"].plot(
-                ax=ax2, label="Cumulative", color="orange", legend=True
-            ).legend(loc="upper right")
+                ax=ax2, label="Cumulative", color="b", legend=True
+            ).legend(loc="center right")
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_title("Cancel Fee Overpayments")
@@ -809,7 +824,7 @@ class Simulation(object):
                 axes[plot_num].set_ylabel("Satoshis", labelpad=15)
                 axes[plot_num].set_xlabel("Block", labelpad=15)
             if self.Vm != []:
-                df = DataFrame(self.Vm, columns=["Block","Vm"])
+                df = DataFrame(self.Vm, columns=["Block", "Vm"])
                 df.set_index("Block", inplace=True)
                 df.plot(ax=axes[plot_num], legend=True)
                 axes[plot_num].legend(["$V_m$"])
@@ -817,7 +832,6 @@ class Simulation(object):
             plot_num += 1
 
         figure.size = 5.4, plot_num*3.9
-
 
         if output is not None:
             plt.savefig(f"{output}.png")
@@ -831,10 +845,11 @@ class Simulation(object):
 
         plt.style.use(["plot_style.txt"])
         # Plot fee history
-        self.wt.feerate_df["MeanFeerate"][start_block:end_block].plot(ax=axes[1])
+        self.wt.feerate_df["MeanFeerate"][start_block:end_block].plot(
+            ax=axes[1])
         axes[1].set_ylabel("Feerate (sats/vByte)")
         axes[1].set_title("Historic Feerates")
- 
+
         if output is not None:
             plt.savefig(f"{output}")
 
