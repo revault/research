@@ -162,18 +162,10 @@ class StateMachine:
         """
         if tx_type not in ["cancel", "emergency", "unemergency"]:
             raise ValueError("Invalid tx_type")
-        # feerate in satoshis/vbyte, weights in WU == 4vbytes, so feerate*weight/4 gives satoshis
-        return round(
-            feerate
-            * (
-                int(
-                    CANCEL_TX_WEIGHT[self.n_stk][self.n_man]
-                    + n_fb_inputs * P2WPKH_INPUT_SIZE
-                )
-                / 4
-            ),
-            0,
-        )
+        # feerate is in satoshis/vbyte
+        cancel_tx_size_no_fb = (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
+        cancel_tx_size = cancel_tx_size_no_fb + n_fb_inputs * P2WPKH_INPUT_SIZE
+        return cancel_tx_size * feerate
 
     def fee_reserve_per_vault(self, block_height):
         return self._feerate_to_fee(
@@ -183,9 +175,7 @@ class StateMachine:
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
         feerate = self._feerate(block_height)
-        Vm = self._feerate_to_fee(feerate, "cancel", 0) + feerate * (
-            float(P2WPKH_INPUT_SIZE) / 4
-        )
+        Vm = self._feerate_to_fee(feerate, "cancel", 0) + feerate * P2WPKH_INPUT_SIZE
         if Vm <= 0:
             raise ValueError(
                 f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
@@ -197,7 +187,7 @@ class StateMachine:
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
         t1 = (reserve - self.Vm(block_height)) / self.O_0_factor
-        t2 = reserve_rate * (float(P2WPKH_INPUT_SIZE) / 4) + self._feerate_to_fee(
+        t2 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
             10, "cancel", 0
         )
         return max(t1, t2)
@@ -258,7 +248,7 @@ class StateMachine:
         """
         # FIXME: What is a reasonable factor of a 'negligible coin'?
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * (float(P2WPKH_INPUT_SIZE) / 4) + self._feerate_to_fee(
+        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
             10, "cancel", 0
         )
         t2 = self.Vm(block_height)
