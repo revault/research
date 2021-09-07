@@ -195,9 +195,7 @@ class StateMachine:
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
         t1 = (reserve - self.Vm(block_height)) / self.O_0_factor
-        t2 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
-            10, "cancel", 0
-        )
+        t2 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(10, "cancel", 0)
         return int(max(t1, t2))
 
     def fb_coins_dist(self, block_height):
@@ -258,9 +256,7 @@ class StateMachine:
         assert isinstance(coin["amount"], int)
         # FIXME: What is a reasonable factor of a 'negligible coin'?
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
-            10, "cancel", 0
-        )
+        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(10, "cancel", 0)
         t2 = self.Vm(block_height)
         minimum = min(t1, t2)
         if coin["amount"] <= minimum:
@@ -526,23 +522,38 @@ class StateMachine:
             feerate = self._estimate_smart_feerate(block_height)
         except (ValueError, KeyError):
             feerate = self._feerate(block_height)
-
         cf_size = cf_tx_size(num_inputs, num_outputs)
         cf_tx_fee = int(cf_size * feerate)
 
         # If there is any remainder, use it first to pay the fee for this transaction
         remainder = total_to_consume - (num_new_reserves * sum(fb_coins))
         assert isinstance(remainder, int)
-
-        # Check if remainder would cover the fee for the tx, if so, add the remainder-fee to the final new coin
+        # If we have more than we need for the CF fee..
         if remainder > cf_tx_fee:
-            # FIXME: i think this can be large
-            self.fbcoins[-1]["amount"] += remainder - cf_tx_fee
+            # .. First try to opportunistically add a new fb coin
+            # FIXME: maybe add more than one?
+            added_coin_value = self.min_fbcoin_value(block_height)
+            if remainder - cf_tx_fee > added_coin_value + P2WPKH_OUTPUT_SIZE * feerate:
+                self.fbcoins.append(
+                    {
+                        "idx": self.fbcoin_count,
+                        "amount": remainder - cf_tx_fee,
+                        "allocation": None,
+                        "processed": block_height,
+                    }
+                )
+                self.fbcoin_count += 1
+                return cf_tx_fee + P2WPKH_OUTPUT_SIZE * feerate
+
+            # And fallback to distribute the excess across the created fb coins
+            increase = (remainder - cf_tx_fee) // num_outputs
+            for c in self.fbcoins[len(self.fbcoins) - num_outputs :]:
+                c["amount"] += increase
             return cf_tx_fee
         else:
             if num_new_reserves == 1:
                 logging.debug(
-                    f"        CF Tx failed sice num_new_reserves = 0 (accounting for expected fee)"
+                    "        CF Tx failed since num_new_reserves < 1 (accounting for expected fee)"
                 )
                 # Not enough in available coins to fanout to 1 complete fee_reserve, when accounting
                 # for the fee, so return to initial state and return 0 (as in, 0 fee paid)
