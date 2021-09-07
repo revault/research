@@ -442,8 +442,9 @@ class Simulation(object):
 
             if self.with_balance:
                 self.balances.append(
-                    [block, self.wt.balance(), self.required_reserve(block)]
+                    [block, self.wt.balance(), self.required_reserve(block), self.wt.unallocated_balance()]
                 )
+
             if self.with_risk_status:
                 status = self.wt.risk_status(block)
                 if (status["vaults_at_risk"] != 0) or (
@@ -526,7 +527,7 @@ class Simulation(object):
         # Plot WT balance vs total required reserve
         if self.with_balance and self.balances != []:
             bal_df = DataFrame(
-                self.balances, columns=["block", "balance", "required reserve"]
+                self.balances, columns=["block", "balance", "required reserve", "unallocated balance"]
             )
             bal_df.set_index(["block"], inplace=True)
             bal_df.plot(ax=axes[plot_num], title="WT Balance", legend=True)

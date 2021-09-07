@@ -248,6 +248,9 @@ class StateMachine:
                 O[-1] += excess
             return O
 
+    def unallocated_balance(self):
+        return sum([coin["amount"] for coin in self.fbcoins if coin["allocation"]==None])
+
     def balance(self):
         return sum([coin["amount"] for coin in self.fbcoins])
 
@@ -333,24 +336,7 @@ class StateMachine:
                 self._remove_coin(coin)
                 num_inputs += 1
 
-        # Only consolidate old coins during low fee periods, defined as when the
-        # current feerate is less than 1/x of the feerate for the reserve per vault. Otherwise,
-        # only do fan-out.
-        feerate = self._feerate(block_height)
-        reserve_rate = self._feerate_reserve_per_vault(block_height)
-        old_age = 12 * 7 * 144  # 12 weeks worth of blocks
-        total_old = 0
-        x = 10  # FIXME: find appropriate value
-        if feerate < reserve_rate / x:
-            for coin in list(self.fbcoins):
-                if (block_height - coin["processed"] > old_age) and (
-                    coin["allocation"] == None
-                ):
-                    total_old += coin["amount"]
-                    self._remove_coin(coin)
-                    num_inputs += 1
-
-        total_to_consume = total_unprocessed + total_negligible + total_old
+        total_to_consume = total_unprocessed + total_negligible
         return total_to_consume, num_inputs
 
     def grab_coins_2(self, block_height):
