@@ -65,6 +65,7 @@ class StateMachine:
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
+        self.I_3_tol = 0.2
 
         # avoid unnecessary search by caching fee reserve per vault
         self.frpv = (None, None)  # block, value
@@ -442,6 +443,49 @@ class StateMachine:
         """
         feerate = self._feerate_reserve_per_vault(height)
         return int(feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(5, "cancel", 0))
+
+    def grab_coins_4(self, block_height):
+        """Select coins to consume as inputs for the tx transaction,
+        remove them from P and V.
+        - unprocessed
+        - not in O(t) with tolerance of X%
+
+        Return: total amount of consumed inputs, number of inputs
+        """
+        fb_coins = self.fb_coins_dist(block_height)
+        num_inputs = 0
+
+        # Take all fbcoins that haven't been processed, get their total amount,
+        # and remove them from self.fbcoins
+        total_unprocessed = 0
+        # loop over copy of the list since the remove() method changes list indexing
+        for coin in list(self.fbcoins):
+            if coin["processed"] == None:
+                total_unprocessed += coin["amount"]
+                self._remove_coin(coin)
+                num_inputs += 1
+
+        # Take all fbcoins that aren't in O(t) within the tolerance, and
+        # remove them from self.fbcoins
+        total_diverged = 0
+        tol = self.I_3_tol
+        O = self.fb_coins_dist(block_height)
+        for coin in list(self.fbcoins):
+            coin_ok = False
+            for x in O:
+                if (1-tol)*x <= coin["amount"] <= (1+tol)*x:
+                    coin_ok = True
+                    break
+            if coin_ok:
+                continue
+            else:
+                total_diverged += coin["amount"]
+                self._remove_coin(coin)
+                num_inputs += 1
+
+        total_to_consume = total_unprocessed + total_diverged
+        return total_to_consume, num_inputs
+
 
     def consolidate_fanout(self, block_height):
         """Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
