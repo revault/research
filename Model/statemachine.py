@@ -162,18 +162,10 @@ class StateMachine:
         """
         if tx_type not in ["cancel", "emergency", "unemergency"]:
             raise ValueError("Invalid tx_type")
-        # feerate in satoshis/vbyte, weights in WU == 4vbytes, so feerate*weight/4 gives satoshis
-        return round(
-            feerate
-            * (
-                int(
-                    CANCEL_TX_WEIGHT[self.n_stk][self.n_man]
-                    + n_fb_inputs * P2WPKH_INPUT_SIZE
-                )
-                / 4
-            ),
-            0,
-        )
+        # feerate is in satoshis/vbyte
+        cancel_tx_size_no_fb = (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
+        cancel_tx_size = cancel_tx_size_no_fb + n_fb_inputs * P2WPKH_INPUT_SIZE
+        return cancel_tx_size * feerate
 
     def fee_reserve_per_vault(self, block_height):
         return self._feerate_to_fee(
