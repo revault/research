@@ -42,6 +42,7 @@ class StateMachine:
         estimate_strat,
         o_version,
         i_version,
+        allocate_version,
     ):
         self.n_stk = n_stk
         self.n_man = n_man
@@ -62,6 +63,7 @@ class StateMachine:
 
         self.O_version = o_version
         self.I_version = i_version
+        self.allocate_version = allocate_version
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
@@ -469,7 +471,7 @@ class StateMachine:
         # remove them from self.fbcoins
         total_diverged = 0
         tol = self.I_3_tol
-        O = self.fb_coins_dist(block_height)
+        O = set(self.fb_coins_dist(block_height)) # remove repeated values
         for coin in list(self.fbcoins):
             coin_ok = False
             for x in O:
@@ -590,7 +592,7 @@ class StateMachine:
 
         return cf_tx_fee
 
-    def allocate(self, vaultID, amount, block_height):
+    def _allocate_0(self, vaultID, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
@@ -743,6 +745,155 @@ class StateMachine:
             self.vaults.append(
                 {"id": vaultID, "amount": amount, "fee_reserve": fee_reserve}
             )
+
+    def _allocate_1(self, vaultID, amount, block_height):
+        """WT allocates coins to a (new/existing) vault if there is enough
+        available coins to meet the requirement.
+        """
+        # Recovery state
+        fbcoins_copy = list(self.fbcoins)
+        vaults_copy = list(self.vaults)
+
+        try:
+            # If vault already exists and is under requirement, de-allocate its current fee 
+            # reserve first
+            vault = next(vault for vault in self.vaults if vault["id"] == vaultID)
+            if self.under_requirement(vault["fee_reserve"], block_height) == 0:
+                return
+            else:
+                logging.debug(
+                    f"  Allocation transition to an existing vault {vaultID} at block {block_height}"
+                )
+                for coin in vault["fee_reserve"]:
+                    coin["allocation"] = None
+                self.vaults.remove(vault)
+        except (StopIteration):
+            logging.debug(
+                f"  Allocation transition to new vault {vaultID} at block {block_height}"
+            )
+
+        total_unallocated = round(
+            sum(
+                [
+                    coin["amount"]
+                    for coin in self.fbcoins
+                    if (coin["allocation"] == None) & (coin["processed"] != None) # FIXME why processed?
+                ]
+            ),
+            0,
+        )
+        required_reserve = self.fee_reserve_per_vault(block_height)
+
+        Vm = self.Vm(block_height)
+        logging.debug(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
+        if int(required_reserve) > int(total_unallocated):
+            self.fbcoins = fbcoins_copy
+            self.vaults = vaults_copy
+            raise RuntimeError(
+                f"Watchtower doesn't ackknowledge delegation for vault {vaultID} since total un-allocated and processed fee-reserve is insufficient"
+            )
+
+        # WT begins allocating coins to this vault and finally updates the vault's fee_reserve
+        else:
+            fee_reserve = []
+            O = self.fb_coins_dist(block_height)
+            tolerances = [0.05,0.1,0.2,0.3]
+            while sum([coin["amount"] for coin in fee_reserve]) < required_reserve:
+                # Optimistically search for coins in O with small tolerance
+                for tol in tolerances:
+                    not_found = []
+                    for x in O:
+                        try:
+                            fbcoin = next(
+                                coin for coin in self.fbcoins
+                                if (coin["allocation"] == None)
+                                & ((1 - tol) * x <= coin["amount"] <=(1 + tol) * x)
+                            )
+                            fbcoin.update(
+                                {
+                                    "idx": fbcoin["idx"],
+                                    "amount": fbcoin["amount"],
+                                    "allocation": vaultID,
+                                    "processed": fbcoin["processed"],
+                                }
+                            )
+                            fee_reserve.append(fbcoin)
+                            logging.debug(
+                                f"    Coin = {fbcoin['amount']} found with tolerance {tol*100}%, added to fee reserve"
+                            )
+                        except(StopIteration):
+                            logging.debug(
+                                f"    No coin found with amount = {x} with tolerance {tol*100}%"
+                            )
+                            not_found.append(x)
+                            continue
+                    # If there was any failure, try again with a wider tolerance for remaining not found amounts
+                    O = not_found
+                    # All coins found with some tolerance
+                    if not_found == []:
+                        break
+
+                # Now handle the remaining requirement
+                diff =  required_reserve - sum([coin["amount"] for coin in fee_reserve])
+                available = [
+                    coin
+                    for coin in self.fbcoins
+                    if (coin["allocation"] == None) & (coin["processed"] != None)
+                ]
+                # sort in increasing order of amount
+                available = sorted(available, key=lambda coin: coin["amount"])
+                # Try to fill the remaining requirement with smallest available coin that covers the diff
+                try:
+                    fbcoin = next(coin for coin in available if coin["amount"] > diff)
+                    fbcoin.update(
+                        {
+                            "idx": fbcoin["idx"],
+                            "amount": fbcoin["amount"],
+                            "allocation": vaultID,
+                            "processed": fbcoin["processed"],
+                        }
+                    )
+                    fee_reserve.append(fbcoin)
+                    logging.debug(
+                        f"    Coin = {fbcoin['amount']} found to cover remaining requirement and added to fee reserve"
+                    )
+                    continue
+                # Otherwise, take the largest available coin and repeat
+                except (StopIteration):
+                    fbcoin = available[-1]
+                    fbcoin.update(
+                        {
+                            "idx": fbcoin["idx"],
+                            "amount": fbcoin["amount"],
+                            "allocation": vaultID,
+                            "processed": fbcoin["processed"],
+                        }
+                    )
+                    fee_reserve.append(fbcoin)
+                    logging.debug(
+                        f"    Coin = {fbcoin['amount']} found as largest available and added to fee reserve"
+                    )
+                    continue
+
+            new_reserve_total = sum([coin["amount"] for coin in fee_reserve])
+            assert new_reserve_total >= required_reserve
+            logging.debug(
+                f"    Reserve for vault {vaultID} has excess of {new_reserve_total-required_reserve}"
+            )
+
+            # Successful new delegation and allocation!
+            self.vaults.append(
+                {"id": vaultID, "amount": amount, "fee_reserve": fee_reserve}
+            )
+
+    def allocate(self, vaultID, amount, block_height):
+
+        if self.allocate_version == 0:
+            self._allocate_0(vaultID, amount, block_height)
+
+        elif self.allocate_version == 1:
+            self._allocate_1(vaultID, amount, block_height)
+
 
     def process_cancel(self, vaultID, block_height):
         """The cancel must be updated with a fee (the large Vm allocated to it).

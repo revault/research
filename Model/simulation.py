@@ -24,6 +24,7 @@ class Simulation(object):
         estimate_strat,
         o_version,
         i_version,
+        allocate_version,
         exp_active_vaults,
         refill_excess,
         refill_period,
@@ -61,6 +62,7 @@ class Simulation(object):
             estimate_strat,
             o_version,
             i_version,
+            allocate_version,
         )
         self.vault_count = 0
         self.vault_id = 0
