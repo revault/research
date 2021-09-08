@@ -19,6 +19,7 @@ from utils import (
     cf_tx_size,
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
+    TX_OVERHEAD_SIZE,
 )
 
 
@@ -475,9 +476,8 @@ class StateMachine:
         # save initial state to recover if failure
         fbcoins_copy = list(self.fbcoins)
         vaults_copy = list(self.vaults)
-
         # Set target values for our coin creation amounts
-        fb_coins = self.fb_coins_dist(block_height)
+        target_coin_dist = self.fb_coins_dist(block_height)
 
         # Select and consume inputs with I(t), returning the total amount and the
         # number of inputs.
@@ -492,13 +492,40 @@ class StateMachine:
         else:
             raise CfError("Unknown algorithm version for coin consolidation")
 
-        # Counter for number of outputs of the CF Tx
-        num_outputs = 0
+        try:
+            feerate = self._estimate_smart_feerate(block_height)
+        # FIXME: why KeyError??
+        except (ValueError, KeyError):
+            feerate = self._feerate(block_height)
 
-        # FIXME this doesn't re-create enough coins? Or maybe "there is always a top up afterward"?
-        # In any case this needs to make sure to not re-create less coins?
-        # Now create a distribution of new coins
-        num_new_reserves = total_to_consume // (sum(fb_coins))
+        # FIXME this doesn't re-create enough coins? If we consolidated some.
+
+        # Keep track of the CF tx size and fees as we add outputs
+        cf_size = TX_OVERHEAD_SIZE + P2WPKH_INPUT_SIZE * num_inputs
+        cf_tx_fee = int(cf_size * feerate)
+        # The cost of a distribution for a single vault in the CF tx
+        dist_size = P2WPKH_OUTPUT_SIZE * len(target_coin_dist)
+        dist_fees = int(dist_size * feerate)
+        dist_cost = sum(target_coin_dist) + dist_fees
+        # Add new distributions of coins to the CF until we can't afford it anymore
+        num_new_reserves = 0
+        consumed = 0
+        while True:
+            consumed += dist_cost
+            if consumed > total_to_consume:
+                break
+
+            # Don't create a new set of outputs if we can't pay the fees for it
+            if total_to_consume - consumed <= cf_tx_fee:
+                break
+            cf_size += dist_size
+            cf_tx_fee += int(dist_size * feerate)
+            if cf_size > MAX_TX_SIZE:
+                raise CfError("The consolidate_fanout transaction is too large!")
+
+            num_new_reserves += 1
+            for x in target_coin_dist:
+                self._add_coin(x, processed=block_height)
 
         if num_new_reserves == 0:
             logging.debug(
@@ -510,22 +537,12 @@ class StateMachine:
             self.vaults = vaults_copy
             return 0
 
-        for i in range(0, num_new_reserves):
-            for x in fb_coins:
-                self._add_coin(x, processed=block_height)
-                num_outputs += 1
-
-        # Compute fee for CF Tx
-        try:
-            feerate = self._estimate_smart_feerate(block_height)
-        except (ValueError, KeyError):
-            feerate = self._feerate(block_height)
-        cf_size = cf_tx_size(num_inputs, num_outputs)
-        cf_tx_fee = int(cf_size * feerate)
-
-        # If there is any remainder, use it first to pay the fee for this transaction
-        remainder = total_to_consume - (num_new_reserves * sum(fb_coins))
+        remainder = total_to_consume - (num_new_reserves * sum(target_coin_dist))
         assert isinstance(remainder, int)
+        assert (
+            remainder >= cf_tx_fee
+        ), "We must never try to create more fb coins than we can afford to"
+
         # If we have more than we need for the CF fee..
         if remainder > cf_tx_fee:
             # .. First try to opportunistically add a new fb coin
@@ -536,88 +553,12 @@ class StateMachine:
                 return cf_tx_fee + P2WPKH_OUTPUT_SIZE * feerate
 
             # And fallback to distribute the excess across the created fb coins
+            num_outputs = num_new_reserves * len(target_coin_dist)
             increase = (remainder - cf_tx_fee) // num_outputs
             for c in self.fbcoins[len(self.fbcoins) - num_outputs :]:
                 c["amount"] += increase
-            return cf_tx_fee
-        else:
-            if num_new_reserves == 1:
-                logging.debug(
-                    "        CF Tx failed since num_new_reserves < 1 (accounting for expected fee)"
-                )
-                # Not enough in available coins to fanout to 1 complete fee_reserve, when accounting
-                # for the fee, so return to initial state and return 0 (as in, 0 fee paid)
-                self.fbcoins = fbcoins_copy
-                self.vaults = vaults_copy
-                return 0
 
-            # Otherwise, implicitly consume the entire remainder, and use some
-            # of the value in the CF Tx's outputs to pay for the rest of the fee
-            cf_tx_fee -= remainder
-            # Scan through new outputs (the most recent num_outputs coins in self.fbcoins)
-            # and use them to pay for the tx (starts with last coin of O(t) in the latest reserve,
-            # and works backwards). If consumed entirely, the fee no longer needs to account for
-            # that output's size.
-            if self.O_version == 0:
-                outputs = list(self.fbcoins[: -num_outputs - 1 : -1])
-            # Take from largest first
-            if self.O_version == 1:
-                outputs = sorted(
-                    list(self.fbcoins[: -num_outputs - 1 : -1]),
-                    key=lambda coin: coin["amount"],
-                    reverse=True,
-                )
-
-            for coin in outputs:
-                assert isinstance(coin["amount"], int) and isinstance(cf_tx_fee, int)
-                # This coin is sufficient
-                if coin["amount"] >= cf_tx_fee:
-                    # Update the amount in the actual self.fbcoins list, not in the copy
-                    for c in self.fbcoins:
-                        if c == coin:
-                            c["amount"] -= cf_tx_fee
-                            assert isinstance(c["amount"], int)
-                            cf_tx_fee = 0
-                            break  # coins are unique, can stop when the correct one is found
-                    break
-                # The coin can't cover the fee, but could cover if it was entirely consumed and
-                # the tx size is reduced by removing the output
-                elif (
-                    cf_tx_fee
-                    > coin["amount"]
-                    >= cf_tx_fee - P2WPKH_OUTPUT_SIZE * feerate
-                ):
-                    self.fbcoins.remove(coin)
-                    cf_tx_fee = 0
-                    num_outputs -= 1
-                    # FIXME: Currently overpays slightly, is that ok? or better to add difference to
-                    # one of the other fbcoins?
-                    break
-                # The coin can't cover the fee even if the tx's size is reduced by not including
-                # this coin as an output
-                elif cf_tx_fee - P2WPKH_OUTPUT_SIZE * feerate > coin["amount"]:
-                    self.fbcoins.remove(coin)
-                    cf_tx_fee -= coin["amount"]
-                    cf_tx_fee -= int(P2WPKH_OUTPUT_SIZE * feerate)
-                    num_outputs -= 1
-
-            if cf_tx_fee > 0:
-                raise (
-                    RuntimeError(
-                        "The fee for the consolidate-fanout transaction is too high to pay for even if it creates 0 outputs"
-                    )
-                )
-
-            # note: cf_tx_fee used above to track how much each output contributed to the required fee,
-            # so it is recomputed here to return the actual fee paid
-            if cf_size > MAX_TX_SIZE:
-                raise (
-                    RuntimeError(
-                        "The consolidate_fanout transactino is too large! Please be smarter when constructing it."
-                    )
-                )
-            cf_tx_fee = cf_size * feerate
-            return cf_tx_fee
+        return cf_tx_fee
 
     def allocate(self, vaultID, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
@@ -649,7 +590,7 @@ class StateMachine:
                 [
                     coin["amount"]
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) & (coin["processed"] != None)
+                    if (coin["allocation"] == None) and (coin["processed"] != None)
                 ]
             ),
             0,
@@ -678,7 +619,7 @@ class StateMachine:
                                 coin
                                 for coin in self.fbcoins
                                 if (coin["allocation"] == None)
-                                & ((1 + tol) * Vm >= coin["amount"] >= ((1 - tol) * Vm))
+                                and ((1 + tol) * Vm >= coin["amount"] >= ((1 - tol) * Vm))
                             )
                             fbcoin.update(
                                 {
@@ -704,7 +645,7 @@ class StateMachine:
                 available = [
                     coin
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) & (coin["processed"] != None)
+                    if (coin["allocation"] == None) and (coin["processed"] != None)
                 ]
                 if available == []:
                     self.fbcoins = fbcoins_copy
