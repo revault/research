@@ -271,15 +271,17 @@ class StateMachine:
 
     # FIXME: should return the picked coins
     def grab_coins_0(self, block_height):
-        """Select coins to consume as inputs for the tx transaction,
+        """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
+
+        This version grabs all the existing feebump coins.
 
         Return: total amount of consumed inputs, number of inputs
         """
         num_inputs = 0
-        # Take all fbcoins, get their total amount,
-        # and remove them from self.fbcoins
         total = 0
+
+        # FIXME: delete the list, don't delete each elem
         # loop over copy of the list since the remove() method changes list indexing
         for coin in list(self.fbcoins):
             total += coin["amount"]
@@ -290,15 +292,19 @@ class StateMachine:
 
     # FIXME: should return the picked coins
     def grab_coins_1(self, block_height):
-        """Select coins to consume as inputs for the tx transaction,
+        """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
+
+        This version grabs all the coins that either haven't been processed yet, are
+        negligible, or are not allocated and have been processed a long time ago.
 
         Return: total amount of consumed inputs, number of inputs
         """
         num_inputs = 0
-        # Take all fbcoins that haven't been processed, get their total amount,
-        # and remove them from self.fbcoins
         total_unprocessed = 0
+
+        # FIXME: don't loop 3 times! Also may be more efficient to re-create the list
+        # instead of removing that much.
         # loop over copy of the list since the remove() method changes list indexing
         for coin in list(self.fbcoins):
             if coin["processed"] == None:
@@ -336,17 +342,20 @@ class StateMachine:
         return total_to_consume, num_inputs
 
     def grab_coins_2(self, block_height):
-        """Select coins to consume as inputs for the tx transaction,
+        """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
-        - unprocessed
-        - unallocated and not in O(t) and old
-        - negligible
+
+        This version grabs all the coins that either haven't been processed yet, are
+        negligible, or are unallocated and have been processed a long time ago and are
+        not in the ideal coin distribution.
 
         Return: total amount of consumed inputs, number of inputs
         """
         fb_coins = self.fb_coins_dist(block_height)
         num_inputs = 0
 
+        # FIXME: don't loop 3 times! Also may be more efficient to re-create the list
+        # instead of removing that much.
         # Take all fbcoins that haven't been processed, get their total amount,
         # and remove them from self.fbcoins
         total_unprocessed = 0
@@ -362,6 +371,7 @@ class StateMachine:
         total_unallocated = 0
         old_age = 12 * 7 * 144  # 13 weeks worth of blocks
         for coin in list(self.fbcoins):
+            # FIXME: this is *so* unlikely that the amount will be in fb_coins
             if coin["allocation"] == None and coin["amount"] not in fb_coins:
                 if block_height - coin["processed"] > old_age:
                     total_unallocated += coin["amount"]
