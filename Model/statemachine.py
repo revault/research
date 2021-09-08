@@ -48,7 +48,7 @@ class StateMachine:
         self.vaults = []
         # fbcoins = [{"idx": int, "amount": int, "allocation": Option<vaultID>, "processed": Option<block_num>}, ...]
         self.fbcoins = []
-        self.fbcoin_count = 0
+        self.fbcoin_id = 0
 
         self.hist_df = read_csv(
             hist_feerate_csv, parse_dates=True, index_col="block_height"
@@ -68,20 +68,33 @@ class StateMachine:
         # avoid unnecessary search by caching fee reserve per vault
         self.frpv = (None, None)  # block, value
 
+    # FIXME: a FeebumpCoin and FeebumpCoinPool class would be neat
+    def _fbcoin_id(self):
+        self.fbcoin_id += 1
+        return self.fbcoin_id
+
+    def _add_coin(self, amount, allocation=None, processed=None):
+        assert isinstance(amount, int)
+        self.fbcoins.append(
+            {
+                "idx": self._fbcoin_id(),
+                "amount": amount,
+                "allocation": allocation,
+                "processed": processed,
+            }
+        )
+
+    # FIXME: have a by index version..
     def _remove_coin(self, coin):
         self.fbcoins.remove(coin)
-        for vault in self.vaults:
-            try:
-                vault["fee_reserve"].remove(coin)
-            # Not in that vault
-            except (ValueError):
-                continue
+        if coin["allocation"] is None:
+            return
 
-        # FIXME: Does this version perform better or worse?
-        # for vault in self.vaults:
-        #     if coin in vault['fee_reserve']:
-        #         vault['fee_reserve'].remove(coin)
-        #         break # Coin is unique, stop looping once found and removed
+        # FIXME have a mapping instead of inefficiently looping..
+        for vault in self.vaults:
+            if coin in vault["fee_reserve"]:
+                vault["fee_reserve"].remove(coin)
+                return
 
     def _estimate_smart_feerate(self, block_height):
         # FIXME: why always 1-2 ??
@@ -267,14 +280,7 @@ class StateMachine:
     def refill(self, amount):
         """Refill the WT by generating a new feebump coin worth 'amount', with no allocation."""
         assert isinstance(amount, int)
-        utxo = {
-            "idx": self.fbcoin_count,
-            "amount": amount,
-            "allocation": None,
-            "processed": None,
-        }
-        self.fbcoin_count += 1
-        self.fbcoins.append(utxo)
+        self._add_coin(amount)
 
     def grab_coins_0(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -506,15 +512,7 @@ class StateMachine:
 
         for i in range(0, num_new_reserves):
             for x in fb_coins:
-                self.fbcoins.append(
-                    {
-                        "idx": self.fbcoin_count,
-                        "amount": x,
-                        "allocation": None,
-                        "processed": block_height,
-                    }
-                )
-                self.fbcoin_count += 1
+                self._add_coin(x, processed=block_height)
                 num_outputs += 1
 
         # Compute fee for CF Tx
@@ -534,15 +532,7 @@ class StateMachine:
             # FIXME: maybe add more than one?
             added_coin_value = self.min_fbcoin_value(block_height)
             if remainder - cf_tx_fee > added_coin_value + P2WPKH_OUTPUT_SIZE * feerate:
-                self.fbcoins.append(
-                    {
-                        "idx": self.fbcoin_count,
-                        "amount": remainder - cf_tx_fee,
-                        "allocation": None,
-                        "processed": block_height,
-                    }
-                )
-                self.fbcoin_count += 1
+                self._add_coin(added_coin_value, processed=block_height)
                 return cf_tx_fee + P2WPKH_OUTPUT_SIZE * feerate
 
             # And fallback to distribute the excess across the created fb coins
@@ -834,14 +824,12 @@ class StateMachine:
             try:
                 fbcoin = next(coin for coin in reserve if coin["amount"] > init_fee)
                 assert isinstance(fbcoin["amount"], int)
-                vault["fee_reserve"].remove(fbcoin)
-                self.fbcoins.remove(fbcoin)
+                self._remove_coin(fbcoin)
                 init_fee -= fbcoin["amount"]
                 cancel_fb_inputs.append(fbcoin)
             except (StopIteration):
                 fbcoin = reserve[-1]
-                vault["fee_reserve"].remove(fbcoin)
-                self.fbcoins.remove(fbcoin)
+                self._remove_coin(fbcoin)
                 init_fee -= fbcoin["amount"]
                 cancel_fb_inputs.append(fbcoin)
 
