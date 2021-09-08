@@ -69,8 +69,10 @@ class StateMachine:
         self.O_1_factor = 2  # multiplier M
         self.I_3_tol = 0.2
 
-        # avoid unnecessary search by caching fee reserve per vault
+        # avoid unnecessary search by caching fee reserve per vault and Vm
         self.frpv = (None, None)  # block, value
+        self.Vm_cache = (None, None) # block, value
+
 
     # FIXME: a FeebumpCoin and FeebumpCoinPool class would be neat
     def _fbcoin_id(self):
@@ -199,13 +201,18 @@ class StateMachine:
 
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
+        if self.Vm_cache[0] == block_height:
+            return self.Vm_cache[1]
+
         feerate = self._feerate(block_height)
-        Vm = self._feerate_to_fee(feerate, "cancel", 0) + feerate * P2WPKH_INPUT_SIZE
+        Vm = int(self._feerate_to_fee(feerate, "cancel", 0) + feerate * P2WPKH_INPUT_SIZE)
         if Vm <= 0:
             raise ValueError(
                 f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
             )
-        return int(Vm)
+        self.Vm_cache = (block_height, Vm)
+        return Vm
+
 
     def Vb(self, block_height):
         """Amount for a backup feebump coin"""
@@ -457,6 +464,9 @@ class StateMachine:
         fb_coins = self.fb_coins_dist(block_height)
         num_inputs = 0
 
+        num_allocated = 0
+        allocated_consumed = 0
+
         # Take all fbcoins that haven't been processed, get their total amount,
         # and remove them from self.fbcoins
         total_unprocessed = 0
@@ -484,8 +494,13 @@ class StateMachine:
                 total_diverged += coin["amount"]
                 self._remove_coin(coin)
                 num_inputs += 1
+                if coin["allocation"] is not None:
+                    num_allocated += 1
+                    allocated_consumed += coin["amount"]
 
         total_to_consume = total_unprocessed + total_diverged
+        logging.debug(f"    I3 consumed in total: {num_inputs} inputs with {total_to_consume}  sats.")
+        logging.debug(f"    I3 consumed: {num_allocated} allocated inputs with a total of {allocated_consumed} sats.")
         return total_to_consume, num_inputs
 
 
