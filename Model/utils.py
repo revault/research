@@ -7,10 +7,6 @@ P2WPKH_OUTPUT_SIZE = 31
 # Maximum standard transaction size, in virtual bytes
 MAX_TX_SIZE = 100_000
 
-# The maximum sats to decrease from a single fb coin amount to pay for
-# the CF tx fees.
-UNREASONABLE_VALUE_DECREASE = 10_000
-
 # A mapping from the number of stakeholders and managers to the Cancel transaction
 # weight. Generated in advance for performance reasons.
 CANCEL_TX_WEIGHT = {

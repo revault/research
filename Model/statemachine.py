@@ -20,6 +20,7 @@ from utils import (
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
     UNREASONABLE_VALUE_DECREASE,
+    TX_OVERHEAD_SIZE,
 )
 
 
@@ -476,9 +477,8 @@ class StateMachine:
         # save initial state to recover if failure
         fbcoins_copy = list(self.fbcoins)
         vaults_copy = list(self.vaults)
-
         # Set target values for our coin creation amounts
-        fb_coins = self.fb_coins_dist(block_height)
+        target_coin_dist = self.fb_coins_dist(block_height)
 
         # Select and consume inputs with I(t), returning the total amount and the
         # number of inputs.
@@ -493,13 +493,42 @@ class StateMachine:
         else:
             raise CfError("Unknown algorithm version for coin consolidation")
 
-        # Counter for number of outputs of the CF Tx
-        num_outputs = 0
+        try:
+            feerate = self._estimate_smart_feerate(block_height)
+        # FIXME: why KeyError??
+        except (ValueError, KeyError):
+            feerate = self._feerate(block_height)
 
-        # FIXME this doesn't re-create enough coins? Or maybe "there is always a top up afterward"?
-        # In any case this needs to make sure to not re-create less coins?
-        # Now create a distribution of new coins
-        num_new_reserves = total_to_consume // (sum(fb_coins))
+        # FIXME this doesn't re-create enough coins? If we consolidated some.
+
+        # Keep track of the CF tx size and fees as we add outputs
+        cf_size = TX_OVERHEAD_SIZE + P2WPKH_INPUT_SIZE * num_inputs
+        cf_tx_fee = int(cf_size * feerate)
+        num_outputs = 0
+        # The cost of a distribution for a single vault in the CF tx
+        dist_size = P2WPKH_OUTPUT_SIZE * len(target_coin_dist)
+        dist_fees = int(dist_size * feerate)
+        dist_cost = sum(target_coin_dist) + dist_fees
+        # Add new distributions of coins to the CF until we can't afford it anymore
+        num_new_reserves = 0
+        consumed = 0
+        while True:
+            consumed += dist_cost
+            if consumed > total_to_consume:
+                break
+
+            # Don't create a new set of outputs if we can't pay the fees for it
+            if total_to_consume - consumed <= cf_tx_fee + int(dist_size * feerate):
+                break
+            cf_size += dist_size
+            cf_tx_fee += int(dist_size * feerate)
+            if cf_size > MAX_TX_SIZE:
+                raise CfError("The consolidate_fanout transaction is too large!")
+
+            num_new_reserves += 1
+            num_outputs += 1
+            for x in target_coin_dist:
+                self._add_coin(x, processed=block_height)
 
         if num_new_reserves == 0:
             logging.debug(
@@ -511,22 +540,12 @@ class StateMachine:
             self.vaults = vaults_copy
             return 0
 
-        for i in range(0, num_new_reserves):
-            for x in fb_coins:
-                self._add_coin(x, processed=block_height)
-                num_outputs += 1
-
-        # Compute fee for CF Tx
-        try:
-            feerate = self._estimate_smart_feerate(block_height)
-        except (ValueError, KeyError):
-            feerate = self._feerate(block_height)
-        cf_size = cf_tx_size(num_inputs, num_outputs)
-        cf_tx_fee = int(cf_size * feerate)
-
-        # If there is any remainder, use it first to pay the fee for this transaction
-        remainder = total_to_consume - (num_new_reserves * sum(fb_coins))
+        remainder = total_to_consume - (num_new_reserves * sum(target_coin_dist))
         assert isinstance(remainder, int)
+        assert (
+            remainder >= cf_tx_fee
+        ), "We must never try to create more fb coins than we can afford to"
+
         # If we have more than we need for the CF fee..
         if remainder > cf_tx_fee:
             # .. First try to opportunistically add a new fb coin
@@ -540,31 +559,6 @@ class StateMachine:
             increase = (remainder - cf_tx_fee) // num_outputs
             for c in self.fbcoins[len(self.fbcoins) - num_outputs :]:
                 c["amount"] += increase
-            return cf_tx_fee
-        else:
-            if num_new_reserves == 1:
-                logging.debug(
-                    "        CF Tx failed since num_new_reserves < 1 (accounting for expected fee)"
-                )
-                # Not enough in available coins to fanout to 1 complete fee_reserve, when accounting
-                # for the fee, so return to initial state and return 0 (as in, 0 fee paid)
-                self.fbcoins = fbcoins_copy
-                self.vaults = vaults_copy
-                return 0
-
-            # If not enough to pay for the fee, slightly reduce the value of each
-            # feebump coin.
-            # Note the rest of the division is just taken from the fees.
-            outputs_decrease = (cf_tx_fee - remainder) // num_outputs
-            if outputs_decrease >= UNREASONABLE_VALUE_DECREASE:
-                raise CfError(
-                    "Unreasonable fb coin value decrease, not enough to pay fees"
-                )
-            for i in range(len(self.fbcoins) - num_outputs, len(self.fbcoins)):
-                self.fbcoins[i]["amount"] -= outputs_decrease
-
-            if cf_size > MAX_TX_SIZE:
-                raise CfError("The consolidate_fanout transactino is too large!")
             return cf_tx_fee
 
     def allocate(self, vaultID, amount, block_height):
