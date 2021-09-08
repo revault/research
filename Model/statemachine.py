@@ -22,6 +22,13 @@ from utils import (
 )
 
 
+class CfError(RuntimeError):
+    """An error arising during the creation of the Consolidate-Fanout tx"""
+
+    def __init__(self, message):
+        self.message = message
+
+
 class StateMachine:
     """Watchtower state machine."""
 
@@ -152,6 +159,7 @@ class StateMachine:
 
         return self.hist_df[self.estimate_strat][block_height]
 
+    # FIXME: remove tx_type!!
     def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
         """Convert feerate (satoshi/vByte) into transaction fee (satoshi).
 
@@ -390,6 +398,59 @@ class StateMachine:
         total_to_consume = total_unprocessed + total_unallocated + total_negligible
         return total_to_consume, num_inputs
 
+    def grab_coins_3(self, height):
+        """Select coins to consume as inputs of the CF transaction.
+
+        This version grabs all coins that were just refilled. In addition it grabs
+        some fb coins for consolidation:
+            - Allocated ones that it's not safe to keep (those that would not bump the
+              Cancel tx feerate at the reserve (max) feerate).
+            - Unallocated ones ones we would not create, if the current feerate is low.
+
+        Returns the total amount to consolidate and the number of coins to consolidate.
+        """
+        to_keep = []
+        n_to_consolidate = 0
+        total_to_consolidate = 0
+
+        reserve_feerate = self._feerate_reserve_per_vault(height)
+        dust_threshold = reserve_feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
+            1, "cancel", 0
+        )
+        # FIXME: this should use the next 3 blocks feerate
+        low_feerate = self._feerate(height) <= 5
+        min_fbcoin_value = self.min_fbcoin_value(height)
+        for coin in self.fbcoins:
+            if (
+                (coin["processed"] is None)
+                or (coin["allocation"] is not None and coin["amount"] < dust_threshold)
+                or (
+                    coin["allocation"] is None
+                    and low_feerate
+                    and coin["amount"] < min_fbcoin_value
+                )
+            ):
+                n_to_consolidate += 1
+                total_to_consolidate += coin["amount"]
+                # FIXME: index!!
+                for v in self.vaults:
+                    if coin in v["fee_reserve"]:
+                        v["fee_reserve"].remove(coin)
+                        break
+            else:
+                to_keep.append(coin)
+
+        self.fbcoins = to_keep
+        return total_to_consolidate, n_to_consolidate
+
+    def min_fbcoin_value(self, height):
+        """The minimum value for a feebumping coin we create is one that allows
+        to pay for its inclusion at the maximum feerate AND increase the Cancel
+        tx fee by at least 5sat/vbyte.
+        """
+        feerate = self._feerate_reserve_per_vault(height)
+        return int(feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(5, "cancel", 0))
+
     def consolidate_fanout(self, block_height):
         """Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
         new re-fills that enable accurate feebumping and 2) to consolidate negligible feebump coins
@@ -421,6 +482,10 @@ class StateMachine:
             total_to_consume, num_inputs = self.grab_coins_1(block_height)
         elif self.I_version == 2:
             total_to_consume, num_inputs = self.grab_coins_2(block_height)
+        elif self.I_version == 3:
+            total_to_consume, num_inputs = self.grab_coins_3(block_height)
+        else:
+            raise CfError("Unknown algorithm version for coin consolidation")
 
         # Counter for number of outputs of the CF Tx
         num_outputs = 0
