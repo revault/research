@@ -2,7 +2,7 @@
 TODO:
 * simulate requirement for cancel feebump, then implement feebump algo
 * Use integers for all values with units in satoshis
-* Add random time interval between balance low & re-fill trigger (to simulate slow stakeholder),
+* Add random time interval between balance low and re-fill trigger (to simulate slow stakeholder),
   to investigate time-at-risk. 
 * Make good documentation
 * Remove possibility for inconsistencies in progress of blocks with WTSim   
@@ -746,7 +746,7 @@ class StateMachine:
                 [
                     coin["amount"]
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) & (coin["processed"] != None) # FIXME why processed?
+                    if (coin["allocation"] == None) and (coin["processed"] != None) # FIXME why processed?
                 ]
             ),
             0,
@@ -776,7 +776,7 @@ class StateMachine:
                             fbcoin = next(
                                 coin for coin in self.fbcoins
                                 if (coin["allocation"] == None)
-                                & ((1 - tol) * x <= coin["amount"] <=(1 + tol) * x)
+                                and ((1 - tol) * x <= coin["amount"] <=(1 + tol) * x)
                             )
                             fbcoin.update(
                                 {
@@ -807,7 +807,7 @@ class StateMachine:
                 available = [
                     coin
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) & (coin["processed"] != None)
+                    if (coin["allocation"] == None) and (coin["processed"] != None)
                 ]
                 # sort in increasing order of amount
                 available = sorted(available, key=lambda coin: coin["amount"])
