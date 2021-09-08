@@ -357,52 +357,52 @@ class StateMachine:
     def grab_coins_2(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
-
-        This version grabs all the coins that either haven't been processed yet, are
-        negligible, or are unallocated and have been processed a long time ago and are
-        not in the ideal coin distribution.
+        - unprocessed
+        - not in O(t) with tolerance of X%
 
         Return: total amount of consumed inputs, number of inputs
         """
         fb_coins = self.fb_coins_dist(block_height)
         num_inputs = 0
 
-        # FIXME: don't loop 3 times! Also may be more efficient to re-create the list
-        # instead of removing that much.
+        num_allocated = 0
+        allocated_consumed = 0
+
         # Take all fbcoins that haven't been processed, get their total amount,
         # and remove them from self.fbcoins
         total_unprocessed = 0
         # loop over copy of the list since the remove() method changes list indexing
         for coin in list(self.fbcoins):
             if coin["processed"] == None:
-                assert isinstance(coin["amount"], int)
                 total_unprocessed += coin["amount"]
                 self._remove_coin(coin)
                 num_inputs += 1
 
-        # Take all unallocated, old, and not in fb_coins, get their total amount,
-        # and remove them from self.fbcoins
-        total_unallocated = 0
-        old_age = 12 * 7 * 144  # 13 weeks worth of blocks
+        # Take all fbcoins that aren't in O(t) within the tolerance, and
+        # remove them from self.fbcoins
+        total_diverged = 0
+        tol = self.I_3_tol
+        O = set(self.fb_coins_dist(block_height)) # remove repeated values
         for coin in list(self.fbcoins):
-            # FIXME: this is *so* unlikely that the amount will be in fb_coins
-            if coin["allocation"] == None and coin["amount"] not in fb_coins:
-                if block_height - coin["processed"] > old_age:
-                    assert isinstance(coin["amount"], int)
-                    total_unallocated += coin["amount"]
-                    self._remove_coin(coin)
-                    num_inputs += 1
-
-        # Take all fbcoins that are negligible, get their total amount, and remove
-        # them from self.fbcoins and their associated vault's fee_reserve
-        total_negligible = 0
-        for coin in list(self.fbcoins):
-            if self.is_negligible(coin, block_height):
-                total_negligible += coin["amount"]
+            coin_ok = False
+            for x in O:
+                if (1-tol)*x <= coin["amount"] <= (1+tol)*x:
+                    coin_ok = True
+                    break
+            if coin_ok:
+                continue
+            else:
+                total_diverged += coin["amount"]
                 self._remove_coin(coin)
                 num_inputs += 1
+                if coin["allocation"] is not None:
+                    num_allocated += 1
+                    allocated_consumed += coin["amount"]
 
-        total_to_consume = total_unprocessed + total_unallocated + total_negligible
+        total_to_consume = total_unprocessed + total_diverged
+        logging.debug(f"    I2 consumed in total: {num_inputs} inputs with {total_to_consume}  sats.")
+        logging.debug(f"    I2 consumed: {num_allocated} allocated inputs with a total of {allocated_consumed} sats.")
+
         return total_to_consume, num_inputs
 
     def grab_coins_3(self, height):
@@ -457,57 +457,6 @@ class StateMachine:
         """
         feerate = self._feerate_reserve_per_vault(height)
         return int(feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(5, "cancel", 0))
-
-    def grab_coins_4(self, block_height):
-        """Select coins to consume as inputs for the tx transaction,
-        remove them from P and V.
-        - unprocessed
-        - not in O(t) with tolerance of X%
-
-        Return: total amount of consumed inputs, number of inputs
-        """
-        fb_coins = self.fb_coins_dist(block_height)
-        num_inputs = 0
-
-        num_allocated = 0
-        allocated_consumed = 0
-
-        # Take all fbcoins that haven't been processed, get their total amount,
-        # and remove them from self.fbcoins
-        total_unprocessed = 0
-        # loop over copy of the list since the remove() method changes list indexing
-        for coin in list(self.fbcoins):
-            if coin["processed"] == None:
-                total_unprocessed += coin["amount"]
-                self._remove_coin(coin)
-                num_inputs += 1
-
-        # Take all fbcoins that aren't in O(t) within the tolerance, and
-        # remove them from self.fbcoins
-        total_diverged = 0
-        tol = self.I_3_tol
-        O = set(self.fb_coins_dist(block_height)) # remove repeated values
-        for coin in list(self.fbcoins):
-            coin_ok = False
-            for x in O:
-                if (1-tol)*x <= coin["amount"] <= (1+tol)*x:
-                    coin_ok = True
-                    break
-            if coin_ok:
-                continue
-            else:
-                total_diverged += coin["amount"]
-                self._remove_coin(coin)
-                num_inputs += 1
-                if coin["allocation"] is not None:
-                    num_allocated += 1
-                    allocated_consumed += coin["amount"]
-
-        total_to_consume = total_unprocessed + total_diverged
-        logging.debug(f"    I3 consumed in total: {num_inputs} inputs with {total_to_consume}  sats.")
-        logging.debug(f"    I3 consumed: {num_allocated} allocated inputs with a total of {allocated_consumed} sats.")
-        return total_to_consume, num_inputs
-
 
     def consolidate_fanout(self, block_height):
         """Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from

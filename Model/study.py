@@ -174,7 +174,7 @@ def study_cf_inputs(range_E, range_RE, O_version):
 
     for re in range_RE:
         for E in range_E:
-            for I_version in [0, 1, 2, 3]:
+            for I_version in [0, 1, 2]:
                 logging.info(f"""Simulating with:
                     I_version {I_version}
                     refill_excess: {re}*E
@@ -219,7 +219,7 @@ def study_cf_inputs(range_E, range_RE, O_version):
 
 
 
-def study_cf_inputs_3(range_tol, E, RE, O_version):
+def study_cf_inputs_2(range_tol, E, RE, O_version):
     """What tolerance performs best?
     """
     N_STK = 5
@@ -232,7 +232,7 @@ def study_cf_inputs_3(range_tol, E, RE, O_version):
     DELEGATION_PERIOD = 144
     INVALID_SPEND_RATE = 0.1
     CATASTROPHE_RATE = 0.005
-    I_VERSION = 3
+    I_VERSION = 2
 
     logging.info(f"""Using config:\n
             N_STK = {N_STK}
@@ -442,7 +442,7 @@ def study_allocate(allocate_version, O_version, E, RE):
     DELEGATION_PERIOD = 144
     INVALID_SPEND_RATE = 0.1
     CATASTROPHE_RATE = 0.005
-    I_VERSION = 3
+    I_VERSION = 2
 
     logging.info(f"""Using config:\n
             N_STK = {N_STK}
