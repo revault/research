@@ -69,9 +69,10 @@ class StateMachine:
         self.O_1_factor = 2  # multiplier M
         self.I_3_tol = 0.2
 
-        # avoid unnecessary search by caching fee reserve per vault and Vm
+        # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
         self.frpv = (None, None)  # block, value
         self.Vm_cache = (None, None) # block, value
+        self.feerate = (None, None) # block, value
 
 
     # FIXME: a FeebumpCoin and FeebumpCoinPool class would be neat
@@ -158,6 +159,9 @@ class StateMachine:
         statistical analysis of historical feerates, using one of the implemented strategies
         chosen with the self.estimate_strat parameter.
         """
+        if self.feerate[0] == block_height:
+            return self.feerate[1]
+
         thirtyD = 144 * 30  # 30 days in blocks
         if self.estimate_strat not in self.hist_df:
             if self.estimate_strat == "MA30":
@@ -176,7 +180,8 @@ class StateMachine:
             else:
                 raise ValueError("Strategy not implemented")
 
-        return self.hist_df[self.estimate_strat][block_height]
+        self.feerate = (block_height, self.hist_df[self.estimate_strat][block_height])
+        return self.feerate[1]
 
     # FIXME: remove tx_type!!
     def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
