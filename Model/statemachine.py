@@ -14,9 +14,9 @@ import numpy as np
 
 from pandas import read_csv
 from utils import (
-    TX_OVERHEAD_SIZE,
     P2WPKH_INPUT_SIZE,
     P2WPKH_OUTPUT_SIZE,
+    cf_tx_size,
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
 )
@@ -165,7 +165,7 @@ class StateMachine:
         # feerate is in satoshis/vbyte
         cancel_tx_size_no_fb = (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
         cancel_tx_size = cancel_tx_size_no_fb + n_fb_inputs * P2WPKH_INPUT_SIZE
-        return cancel_tx_size * feerate
+        return int(cancel_tx_size * feerate)
 
     def fee_reserve_per_vault(self, block_height):
         return self._feerate_to_fee(
@@ -180,7 +180,7 @@ class StateMachine:
             raise ValueError(
                 f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
             )
-        return Vm
+        return int(Vm)
 
     def Vb(self, block_height):
         """Amount for a backup feebump coin"""
@@ -190,7 +190,7 @@ class StateMachine:
         t2 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
             10, "cancel", 0
         )
-        return max(t1, t2)
+        return int(max(t1, t2))
 
     def fb_coins_dist(self, block_height):
         """The coin distribution to create with a CF TX.
@@ -209,7 +209,7 @@ class StateMachine:
         # Strategy 1
         # O = [Vm, MVm, 2MVm, 3MVm, ...]
         if self.O_version == 1:
-            frpv = int(self.fee_reserve_per_vault(block_height))
+            frpv = self.fee_reserve_per_vault(block_height)
             Vm = self.Vm(block_height)
             M = self.O_1_factor  # Factor increase per coin
             O = [Vm]
@@ -221,6 +221,7 @@ class StateMachine:
             while sum(subset) < diff:
                 subset.append(O.pop())
             excess = sum(subset) - diff
+            assert isinstance(excess, int)
             if excess >= Vm:
                 O.append(excess)
             else:
@@ -246,6 +247,7 @@ class StateMachine:
         in the worst case (when the fee rate is equal to the reserve rate).
         Note: t1 is same as the lower bound of Vb.
         """
+        assert isinstance(coin["amount"], int)
         # FIXME: What is a reasonable factor of a 'negligible coin'?
         reserve_rate = self._feerate_reserve_per_vault(block_height)
         t1 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
@@ -260,6 +262,7 @@ class StateMachine:
 
     def refill(self, amount):
         """Refill the WT by generating a new feebump coin worth 'amount', with no allocation."""
+        assert isinstance(amount, int)
         utxo = {
             "idx": self.fbcoin_count,
             "amount": amount,
@@ -269,7 +272,6 @@ class StateMachine:
         self.fbcoin_count += 1
         self.fbcoins.append(utxo)
 
-    # FIXME: should return the picked coins
     def grab_coins_0(self, block_height):
         """Select coins to consume as inputs for the tx transaction,
         remove them from P and V.
@@ -288,7 +290,6 @@ class StateMachine:
 
         return total, num_inputs
 
-    # FIXME: should return the picked coins
     def grab_coins_1(self, block_height):
         """Select coins to consume as inputs for the tx transaction,
         remove them from P and V.
@@ -353,6 +354,7 @@ class StateMachine:
         # loop over copy of the list since the remove() method changes list indexing
         for coin in list(self.fbcoins):
             if coin["processed"] == None:
+                assert isinstance(coin["amount"], int)
                 total_unprocessed += coin["amount"]
                 self._remove_coin(coin)
                 num_inputs += 1
@@ -364,6 +366,7 @@ class StateMachine:
         for coin in list(self.fbcoins):
             if coin["allocation"] == None and coin["amount"] not in fb_coins:
                 if block_height - coin["processed"] > old_age:
+                    assert isinstance(coin["amount"], int)
                     total_unallocated += coin["amount"]
                     self._remove_coin(coin)
                     num_inputs += 1
@@ -415,6 +418,8 @@ class StateMachine:
         # Counter for number of outputs of the CF Tx
         num_outputs = 0
 
+        # FIXME this doesn't re-create enough coins? Or maybe "there is always a top up afterward"?
+        # In any case this needs to make sure to not re-create less coins?
         # Now create a distribution of new coins
         num_new_reserves = total_to_consume // (sum(fb_coins))
 
@@ -428,7 +433,7 @@ class StateMachine:
             self.vaults = vaults_copy
             return 0
 
-        for i in range(0, int(num_new_reserves)):
+        for i in range(0, num_new_reserves):
             for x in fb_coins:
                 self.fbcoins.append(
                     {
@@ -447,17 +452,16 @@ class StateMachine:
         except (ValueError, KeyError):
             feerate = self._feerate(block_height)
 
-        cf_tx_fee = (
-            TX_OVERHEAD_SIZE
-            + num_outputs * P2WPKH_OUTPUT_SIZE
-            + num_inputs * P2WPKH_INPUT_SIZE
-        ) * feerate
+        cf_size = cf_tx_size(num_inputs, num_outputs)
+        cf_tx_fee = int(cf_size * feerate)
 
         # If there is any remainder, use it first to pay the fee for this transaction
         remainder = total_to_consume - (num_new_reserves * sum(fb_coins))
+        assert isinstance(remainder, int)
 
         # Check if remainder would cover the fee for the tx, if so, add the remainder-fee to the final new coin
         if remainder > cf_tx_fee:
+            # FIXME: i think this can be large
             self.fbcoins[-1]["amount"] += remainder - cf_tx_fee
             return cf_tx_fee
         else:
@@ -489,12 +493,14 @@ class StateMachine:
                 )
 
             for coin in outputs:
+                assert isinstance(coin["amount"], int) and isinstance(cf_tx_fee, int)
                 # This coin is sufficient
                 if coin["amount"] >= cf_tx_fee:
                     # Update the amount in the actual self.fbcoins list, not in the copy
                     for c in self.fbcoins:
                         if c == coin:
                             c["amount"] -= cf_tx_fee
+                            assert isinstance(c["amount"], int)
                             cf_tx_fee = 0
                             break  # coins are unique, can stop when the correct one is found
                     break
@@ -516,7 +522,7 @@ class StateMachine:
                 elif cf_tx_fee - P2WPKH_OUTPUT_SIZE * feerate > coin["amount"]:
                     self.fbcoins.remove(coin)
                     cf_tx_fee -= coin["amount"]
-                    cf_tx_fee -= P2WPKH_OUTPUT_SIZE * feerate
+                    cf_tx_fee -= int(P2WPKH_OUTPUT_SIZE * feerate)
                     num_outputs -= 1
 
             if cf_tx_fee > 0:
@@ -528,11 +534,6 @@ class StateMachine:
 
             # note: cf_tx_fee used above to track how much each output contributed to the required fee,
             # so it is recomputed here to return the actual fee paid
-            cf_size = (
-                10.75
-                + num_outputs * P2WPKH_OUTPUT_SIZE
-                + num_inputs * P2WPKH_INPUT_SIZE
-            )
             if cf_size > MAX_TX_SIZE:
                 raise (
                     RuntimeError(
@@ -691,6 +692,7 @@ class StateMachine:
             )
 
             # Successful new delegation and allocation!
+            assert isinstance(amount, int)
             self.vaults.append(
                 {"id": vaultID, "amount": amount, "fee_reserve": fee_reserve}
             )
@@ -745,6 +747,7 @@ class StateMachine:
             reserve = sorted(vault["fee_reserve"], key=lambda coin: coin["amount"])
             try:
                 fbcoin = next(coin for coin in reserve if coin["amount"] > init_fee)
+                assert isinstance(fbcoin["amount"], int)
                 vault["fee_reserve"].remove(fbcoin)
                 self.fbcoins.remove(fbcoin)
                 init_fee -= fbcoin["amount"]

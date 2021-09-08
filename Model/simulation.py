@@ -4,7 +4,7 @@ import random
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
-from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
+from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
 from statemachine import StateMachine
 
 
@@ -145,13 +145,11 @@ class Simulation(object):
         # FIXME: way too much
         expected_num_inputs = len(self.wt.fbcoins) + 1
         expected_cf_fee = (
-            TX_OVERHEAD_SIZE
-            + expected_num_outputs * P2WPKH_OUTPUT_SIZE
-            + expected_num_inputs * P2WPKH_INPUT_SIZE
-        ) * feerate
+            cf_tx_size(expected_num_inputs, expected_num_outputs) * feerate
+        )
 
         R += expected_cf_fee
-        return R
+        return int(R)
 
     def initialize_sequence(self, block_height):
         logging.debug(f"Initialize sequence at block {block_height}")
@@ -204,7 +202,7 @@ class Simulation(object):
 
         # Allocation transitions
         for i in range(0, self.expected_active_vaults):
-            amount = 10e10  # 100 BTC
+            amount = int(10e10)  # 100 BTC
             self.wt.allocate(self.new_vault_id(), amount, block_height)
             self.vault_count += 1
 
@@ -295,7 +293,7 @@ class Simulation(object):
         # If WT fails to acknowledge new delegation, raise AllocationError
         try:
             # Delegate a vault
-            amount = 10e10  # 100 BTC
+            amount = int(10e10)  # 100 BTC
             vault_id = self.new_vault_id()
             logging.debug(
                 f"  Allocation transition at block {block_height} to vault {vault_id}"
@@ -332,6 +330,7 @@ class Simulation(object):
                 logging.debug(
                     f"  Allocation transition at block {block_height} to vault {vault['id']}"
                 )
+                assert isinstance(vault["amount"], int)
                 self.wt.allocate(vault["id"], vault["amount"], block_height)
             except (RuntimeError):
                 logging.debug(f"  Allocation transition FAILED for vault {vault['id']}")
@@ -519,7 +518,9 @@ class Simulation(object):
                 self.with_fb_coins_dist,
             ]
         )
-        figure, axes = plt.subplots(subplots_len, 1, sharex=True, figsize=(5.4, subplots_len * 3.9))
+        figure, axes = plt.subplots(
+            subplots_len, 1, sharex=True, figsize=(5.4, subplots_len * 3.9)
+        )
         plot_num = 0
 
         # Plot WT balance vs total required reserve
@@ -865,7 +866,7 @@ class Simulation(object):
         plt.title("Feerate History")
         plt.xlabel("Block", labelpad=15)
         plt.ylabel("Feerate (sats/vByte)", labelpad=15)
-        fig.size = 3,7
+        fig.size = 3, 7
 
         if output is not None:
             plt.savefig(f"{output}.png")

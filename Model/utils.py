@@ -119,3 +119,10 @@ CANCEL_TX_WEIGHT = {
         10: 2653,
     },
 }
+
+
+def cf_tx_size(n_inputs, n_outputs):
+    """Size of the consolidate-fanout transaction, in vbytes"""
+    return (
+        TX_OVERHEAD_SIZE + n_inputs * P2WPKH_INPUT_SIZE + n_outputs * P2WPKH_OUTPUT_SIZE
+    )
