@@ -19,6 +19,7 @@ from utils import (
     cf_tx_size,
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
+    UNREASONABLE_VALUE_DECREASE,
 )
 
 
@@ -551,72 +552,19 @@ class StateMachine:
                 self.vaults = vaults_copy
                 return 0
 
-            # Otherwise, implicitly consume the entire remainder, and use some
-            # of the value in the CF Tx's outputs to pay for the rest of the fee
-            cf_tx_fee -= remainder
-            # Scan through new outputs (the most recent num_outputs coins in self.fbcoins)
-            # and use them to pay for the tx (starts with last coin of O(t) in the latest reserve,
-            # and works backwards). If consumed entirely, the fee no longer needs to account for
-            # that output's size.
-            if self.O_version == 0:
-                outputs = list(self.fbcoins[: -num_outputs - 1 : -1])
-            # Take from largest first
-            if self.O_version == 1:
-                outputs = sorted(
-                    list(self.fbcoins[: -num_outputs - 1 : -1]),
-                    key=lambda coin: coin["amount"],
-                    reverse=True,
+            # If not enough to pay for the fee, slightly reduce the value of each
+            # feebump coin.
+            # Note the rest of the division is just taken from the fees.
+            outputs_decrease = (cf_tx_fee - remainder) // num_outputs
+            if outputs_decrease >= UNREASONABLE_VALUE_DECREASE:
+                raise CfError(
+                    "Unreasonable fb coin value decrease, not enough to pay fees"
                 )
+            for i in range(len(self.fbcoins) - num_outputs, len(self.fbcoins)):
+                self.fbcoins[i]["amount"] -= outputs_decrease
 
-            for coin in outputs:
-                assert isinstance(coin["amount"], int) and isinstance(cf_tx_fee, int)
-                # This coin is sufficient
-                if coin["amount"] >= cf_tx_fee:
-                    # Update the amount in the actual self.fbcoins list, not in the copy
-                    for c in self.fbcoins:
-                        if c == coin:
-                            c["amount"] -= cf_tx_fee
-                            assert isinstance(c["amount"], int)
-                            cf_tx_fee = 0
-                            break  # coins are unique, can stop when the correct one is found
-                    break
-                # The coin can't cover the fee, but could cover if it was entirely consumed and
-                # the tx size is reduced by removing the output
-                elif (
-                    cf_tx_fee
-                    > coin["amount"]
-                    >= cf_tx_fee - P2WPKH_OUTPUT_SIZE * feerate
-                ):
-                    self.fbcoins.remove(coin)
-                    cf_tx_fee = 0
-                    num_outputs -= 1
-                    # FIXME: Currently overpays slightly, is that ok? or better to add difference to
-                    # one of the other fbcoins?
-                    break
-                # The coin can't cover the fee even if the tx's size is reduced by not including
-                # this coin as an output
-                elif cf_tx_fee - P2WPKH_OUTPUT_SIZE * feerate > coin["amount"]:
-                    self.fbcoins.remove(coin)
-                    cf_tx_fee -= coin["amount"]
-                    cf_tx_fee -= int(P2WPKH_OUTPUT_SIZE * feerate)
-                    num_outputs -= 1
-
-            if cf_tx_fee > 0:
-                raise (
-                    RuntimeError(
-                        "The fee for the consolidate-fanout transaction is too high to pay for even if it creates 0 outputs"
-                    )
-                )
-
-            # note: cf_tx_fee used above to track how much each output contributed to the required fee,
-            # so it is recomputed here to return the actual fee paid
             if cf_size > MAX_TX_SIZE:
-                raise (
-                    RuntimeError(
-                        "The consolidate_fanout transactino is too large! Please be smarter when constructing it."
-                    )
-                )
-            cf_tx_fee = cf_size * feerate
+                raise CfError("The consolidate_fanout transactino is too large!")
             return cf_tx_fee
 
     def allocate(self, vaultID, amount, block_height):
