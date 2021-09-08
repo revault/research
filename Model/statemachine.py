@@ -48,7 +48,7 @@ class StateMachine:
         self.n_man = n_man
         # vaults = [{"id": str, "amount": int, "fee_reserve": [fbcoin]}, ...]
         self.vaults = []
-        # fbcoins = [{"idx": int, "amount": int, "allocation": Option<vaultID>, "processed": Option<block_num>}, ...]
+        # fbcoins = [{"idx": int, "amount": int, "allocation": Option<vault_id>, "processed": Option<block_num>}, ...]
         self.fbcoins = []
         self.fbcoin_id = 0
 
@@ -67,7 +67,7 @@ class StateMachine:
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
-        self.I_3_tol = 0.2
+        self.I_2_tol = 0.2
 
         # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
         self.frpv = (None, None)  # block, value
@@ -235,33 +235,33 @@ class StateMachine:
         There should be at least 1 Vm sized coin in O.
         """
         # Strategy 0
-        # O = [Vm, Vb, Vb, ...Vb]  with 1 + self.O_0_factor elements
+        # dist = [Vm, Vb, Vb, ...Vb]  with 1 + self.O_0_factor elements
         if self.O_version == 0:
             Vm = self.Vm(block_height)
             Vb = self.Vb(block_height)
             return [Vm] + [Vb for i in range(self.O_0_factor)]
 
         # Strategy 1
-        # O = [Vm, MVm, 2MVm, 3MVm, ...]
+        # dist = [Vm, MVm, 2MVm, 3MVm, ...]
         if self.O_version == 1:
             frpv = self.fee_reserve_per_vault(block_height)
             Vm = self.Vm(block_height)
             M = self.O_1_factor  # Factor increase per coin
-            O = [Vm]
-            while sum(O) < frpv:
-                O.append(int((len(O)) * M * Vm))
-            diff = sum(O) - frpv
+            dist = [Vm]
+            while sum(dist) < frpv:
+                dist.append(int((len(dist)) * M * Vm))
+            diff = sum(dist) - frpv
             # find the minimal subset sum of elements that is greater than diff, and remove them
             subset = []
             while sum(subset) < diff:
-                subset.append(O.pop())
+                subset.append(dist.pop())
             excess = sum(subset) - diff
             assert isinstance(excess, int)
             if excess >= Vm:
-                O.append(excess)
+                dist.append(excess)
             else:
-                O[-1] += excess
-            return O
+                dist[-1] += excess
+            return dist
 
     def unallocated_balance(self):
         return sum([coin["amount"] for coin in self.fbcoins if coin["allocation"]==None])
@@ -337,7 +337,7 @@ class StateMachine:
         # instead of removing that much.
         # loop over copy of the list since the remove() method changes list indexing
         for coin in list(self.fbcoins):
-            if coin["processed"] == None:
+            if coin["processed"] is None:
                 total_unprocessed += coin["amount"]
                 self._remove_coin(coin)
                 num_inputs += 1
@@ -373,7 +373,7 @@ class StateMachine:
         total_unprocessed = 0
         # loop over copy of the list since the remove() method changes list indexing
         for coin in list(self.fbcoins):
-            if coin["processed"] == None:
+            if coin["processed"] is None:
                 total_unprocessed += coin["amount"]
                 self._remove_coin(coin)
                 num_inputs += 1
@@ -381,11 +381,11 @@ class StateMachine:
         # Take all fbcoins that aren't in O(t) within the tolerance, and
         # remove them from self.fbcoins
         total_diverged = 0
-        tol = self.I_3_tol
-        O = set(self.fb_coins_dist(block_height)) # remove repeated values
+        tol = self.I_2_tol
+        dist = set(self.fb_coins_dist(block_height)) # remove repeated values
         for coin in list(self.fbcoins):
             coin_ok = False
-            for x in O:
+            for x in dist:
                 if (1-tol)*x <= coin["amount"] <= (1+tol)*x:
                     coin_ok = True
                     break
@@ -470,7 +470,6 @@ class StateMachine:
         The 'processed' value of a fbcoin states the block number in which the CF Tx occurred
         that created this coin. The 'processed' value is used to determine if coins have been
         processed yet, and their 'age'.
-        FIXME: Should "old" coins be consolidated?
 
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
@@ -495,7 +494,6 @@ class StateMachine:
 
         try:
             feerate = self._estimate_smart_feerate(block_height)
-        # FIXME: why KeyError??
         except (ValueError, KeyError):
             feerate = self._feerate(block_height)
 
@@ -561,7 +559,7 @@ class StateMachine:
 
         return cf_tx_fee
 
-    def _allocate_0(self, vaultID, amount, block_height):
+    def _allocate_0(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
@@ -571,19 +569,19 @@ class StateMachine:
 
         try:
             # If vault already exists, de-allocate its current fee reserve first
-            vault = next(vault for vault in self.vaults if vault["id"] == vaultID)
+            vault = next(vault for vault in self.vaults if vault["id"] == vault_id)
             if self.under_requirement(vault["fee_reserve"], block_height) == 0:
                 return
             else:
                 logging.debug(
-                    f"  Allocation transition to an existing vault {vaultID} at block {block_height}"
+                    f"  Allocation transition to an existing vault {vault_id} at block {block_height}"
                 )
                 for coin in vault["fee_reserve"]:
                     coin["allocation"] = None
                 self.vaults.remove(vault)
         except (StopIteration):
             logging.debug(
-                f"  Allocation transition to new vault {vaultID} at block {block_height}"
+                f"  Allocation transition to new vault {vault_id} at block {block_height}"
             )
 
         total_unallocated = round(
@@ -591,7 +589,7 @@ class StateMachine:
                 [
                     coin["amount"]
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) and (coin["processed"] != None)
+                    if (coin["allocation"] is None) and (coin["processed"] != None)
                 ]
             ),
             0,
@@ -600,11 +598,11 @@ class StateMachine:
 
         Vm = self.Vm(block_height)
         logging.debug(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
-        if int(required_reserve) > int(total_unallocated):
+        if required_reserve > total_unallocated:
             self.fbcoins = fbcoins_copy
             self.vaults = vaults_copy
             raise RuntimeError(
-                f"Watchtower doesn't ackknowledge delegation for vault {vaultID} since total un-allocated and processed fee-reserve is insufficient"
+                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since total un-allocated and processed fee-reserve is insufficient"
             )
 
         # WT begins allocating feebump coins to this new vault and finally updates the vault's fee_reserve
@@ -619,17 +617,10 @@ class StateMachine:
                             fbcoin = next(
                                 coin
                                 for coin in self.fbcoins
-                                if (coin["allocation"] == None)
+                                if (coin["allocation"] is None)
                                 and ((1 + tol) * Vm >= coin["amount"] >= ((1 - tol) * Vm))
                             )
-                            fbcoin.update(
-                                {
-                                    "idx": fbcoin["idx"],
-                                    "amount": fbcoin["amount"],
-                                    "allocation": vaultID,
-                                    "processed": fbcoin["processed"],
-                                }
-                            )
+                            fbcoin["allocation"] = vault_id
                             fee_reserve.append(fbcoin)
                             search_Vm = False
                             logging.debug(
@@ -646,7 +637,7 @@ class StateMachine:
                 available = [
                     coin
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) and (coin["processed"] != None)
+                    if (coin["allocation"] is None) and (coin["processed"] != None)
                 ]
                 if available == []:
                     self.fbcoins = fbcoins_copy
@@ -662,14 +653,7 @@ class StateMachine:
                             if ((1 + tol) * Vm < coin["amount"])
                             or (coin["amount"] < (1 - tol) * Vm)
                         )
-                        fbcoin.update(
-                            {
-                                "idx": fbcoin["idx"],
-                                "amount": fbcoin["amount"],
-                                "allocation": vaultID,
-                                "processed": fbcoin["processed"],
-                            }
-                        )
+                        fbcoin["allocation"] = vault_id
                         fee_reserve.append(fbcoin)
                         logging.debug(
                             f"    Coin of size {fbcoin['amount']} added to the fee reserve"
@@ -693,29 +677,22 @@ class StateMachine:
                         f"    All coins found were Vm-sized at block {block_height}"
                     )
                     fbcoin = next(coin for coin in available)
-                    fbcoin.update(
-                        {
-                            "idx": fbcoin["idx"],
-                            "amount": fbcoin["amount"],
-                            "allocation": vaultID,
-                            "processed": fbcoin["processed"],
-                        }
-                    )
+                    fbcoin["allocation"] = vault_id
                     fee_reserve.append(fbcoin)
 
             new_reserve_total = sum([coin["amount"] for coin in fee_reserve])
             assert new_reserve_total >= required_reserve
             logging.debug(
-                f"    Reserve for vault {vaultID} has excess of {new_reserve_total-required_reserve}"
+                f"    Reserve for vault {vault_id} has excess of {new_reserve_total-required_reserve}"
             )
 
             # Successful new delegation and allocation!
             assert isinstance(amount, int)
             self.vaults.append(
-                {"id": vaultID, "amount": amount, "fee_reserve": fee_reserve}
+                {"id": vault_id, "amount": amount, "fee_reserve": fee_reserve}
             )
 
-    def _allocate_1(self, vaultID, amount, block_height):
+    def _allocate_1(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
@@ -726,19 +703,19 @@ class StateMachine:
         try:
             # If vault already exists and is under requirement, de-allocate its current fee 
             # reserve first
-            vault = next(vault for vault in self.vaults if vault["id"] == vaultID)
+            vault = next(vault for vault in self.vaults if vault["id"] == vault_id)
             if self.under_requirement(vault["fee_reserve"], block_height) == 0:
                 return
             else:
                 logging.debug(
-                    f"  Allocation transition to an existing vault {vaultID} at block {block_height}"
+                    f"  Allocation transition to an existing vault {vault_id} at block {block_height}"
                 )
                 for coin in vault["fee_reserve"]:
                     coin["allocation"] = None
                 self.vaults.remove(vault)
         except (StopIteration):
             logging.debug(
-                f"  Allocation transition to new vault {vaultID} at block {block_height}"
+                f"  Allocation transition to new vault {vault_id} at block {block_height}"
             )
 
         total_unallocated = round(
@@ -746,7 +723,7 @@ class StateMachine:
                 [
                     coin["amount"]
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) and (coin["processed"] != None) # FIXME why processed?
+                    if (coin["allocation"] is None) and (coin["processed"] != None)
                 ]
             ),
             0,
@@ -759,33 +736,26 @@ class StateMachine:
             self.fbcoins = fbcoins_copy
             self.vaults = vaults_copy
             raise RuntimeError(
-                f"Watchtower doesn't ackknowledge delegation for vault {vaultID} since total un-allocated and processed fee-reserve is insufficient"
+                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since total un-allocated and processed fee-reserve is insufficient"
             )
 
         # WT begins allocating coins to this vault and finally updates the vault's fee_reserve
         else:
             fee_reserve = []
-            O = self.fb_coins_dist(block_height)
+            dist = self.fb_coins_dist(block_height)
             tolerances = [0.05,0.1,0.2,0.3]
             while sum([coin["amount"] for coin in fee_reserve]) < required_reserve:
                 # Optimistically search for coins in O with small tolerance
                 for tol in tolerances:
                     not_found = []
-                    for x in O:
+                    for x in dist:
                         try:
                             fbcoin = next(
                                 coin for coin in self.fbcoins
-                                if (coin["allocation"] == None)
+                                if (coin["allocation"] is None)
                                 and ((1 - tol) * x <= coin["amount"] <=(1 + tol) * x)
                             )
-                            fbcoin.update(
-                                {
-                                    "idx": fbcoin["idx"],
-                                    "amount": fbcoin["amount"],
-                                    "allocation": vaultID,
-                                    "processed": fbcoin["processed"],
-                                }
-                            )
+                            fbcoin["allocation"] = vault_id
                             fee_reserve.append(fbcoin)
                             logging.debug(
                                 f"    Coin = {fbcoin['amount']} found with tolerance {tol*100}%, added to fee reserve"
@@ -797,7 +767,7 @@ class StateMachine:
                             not_found.append(x)
                             continue
                     # If there was any failure, try again with a wider tolerance for remaining not found amounts
-                    O = not_found
+                    dist = not_found
                     # All coins found with some tolerance
                     if not_found == []:
                         break
@@ -807,21 +777,14 @@ class StateMachine:
                 available = [
                     coin
                     for coin in self.fbcoins
-                    if (coin["allocation"] == None) and (coin["processed"] != None)
+                    if (coin["allocation"] is None) and (coin["processed"] != None)
                 ]
                 # sort in increasing order of amount
                 available = sorted(available, key=lambda coin: coin["amount"])
                 # Try to fill the remaining requirement with smallest available coin that covers the diff
                 try:
                     fbcoin = next(coin for coin in available if coin["amount"] > diff)
-                    fbcoin.update(
-                        {
-                            "idx": fbcoin["idx"],
-                            "amount": fbcoin["amount"],
-                            "allocation": vaultID,
-                            "processed": fbcoin["processed"],
-                        }
-                    )
+                    fbcoin["allocation"] = vault_id
                     fee_reserve.append(fbcoin)
                     logging.debug(
                         f"    Coin = {fbcoin['amount']} found to cover remaining requirement and added to fee reserve"
@@ -830,14 +793,7 @@ class StateMachine:
                 # Otherwise, take the largest available coin and repeat
                 except (StopIteration):
                     fbcoin = available[-1]
-                    fbcoin.update(
-                        {
-                            "idx": fbcoin["idx"],
-                            "amount": fbcoin["amount"],
-                            "allocation": vaultID,
-                            "processed": fbcoin["processed"],
-                        }
-                    )
+                    fbcoin["allocation"] = vault_id
                     fee_reserve.append(fbcoin)
                     logging.debug(
                         f"    Coin = {fbcoin['amount']} found as largest available and added to fee reserve"
@@ -847,31 +803,31 @@ class StateMachine:
             new_reserve_total = sum([coin["amount"] for coin in fee_reserve])
             assert new_reserve_total >= required_reserve
             logging.debug(
-                f"    Reserve for vault {vaultID} has excess of {new_reserve_total-required_reserve}"
+                f"    Reserve for vault {vault_id} has excess of {new_reserve_total-required_reserve}"
             )
 
             # Successful new delegation and allocation!
             self.vaults.append(
-                {"id": vaultID, "amount": amount, "fee_reserve": fee_reserve}
+                {"id": vault_id, "amount": amount, "fee_reserve": fee_reserve}
             )
 
-    def allocate(self, vaultID, amount, block_height):
+    def allocate(self, vault_id, amount, block_height):
 
         if self.allocate_version == 0:
-            self._allocate_0(vaultID, amount, block_height)
+            self._allocate_0(vault_id, amount, block_height)
 
         elif self.allocate_version == 1:
-            self._allocate_1(vaultID, amount, block_height)
+            self._allocate_1(vault_id, amount, block_height)
 
 
-    def process_cancel(self, vaultID, block_height):
+    def process_cancel(self, vault_id, block_height):
         """The cancel must be updated with a fee (the large Vm allocated to it).
         If this fee is unsuccessful at pushing the cancel through, additional small coins may
         be added from the fee_reserve.
         """
-        vault = next((vault for vault in self.vaults if vault["id"] == vaultID), None)
-        if vault == None:
-            raise RuntimeError(f"No vault found with id {vaultID}")
+        vault = next((vault for vault in self.vaults if vault["id"] == vault_id), None)
+        if vault is None:
+            raise RuntimeError(f"No vault found with id {vault_id}")
 
         try:
             init_fee = self._estimate_smart_feerate(block_height)
@@ -926,25 +882,25 @@ class StateMachine:
 
         return cancel_fb_inputs
 
-    def finalize_cancel(self, vaultID):
-        """Once the cancel is confirmed, any remaining fbcoins allocated to vaultID
-        become unallocated. The vault with vaultID is removed from vaults.
+    def finalize_cancel(self, vault_id):
+        """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
+        become unallocated. The vault with vault_id is removed from vaults.
         """
         for coin in self.fbcoins:
-            if coin["allocation"] == vaultID:
+            if coin["allocation"] == vault_id:
                 coin["allocation"] = None
         for vault in list(self.vaults):
-            if vault["id"] == vaultID:
+            if vault["id"] == vault_id:
                 self.vaults.remove(vault)
 
-    def process_spend(self, vaultID):
+    def process_spend(self, vault_id):
         """Once a vault is consumed with a spend, the fee-reserve that was allocated to it
         becomes un-allocated and the vault is removed from the set of vaults.
         """
-        self.vaults = [vault for vault in self.vaults if vault["id"] != vaultID]
+        self.vaults = [vault for vault in self.vaults if vault["id"] != vault_id]
 
         for coin in self.fbcoins:
-            if coin["allocation"] == vaultID:
+            if coin["allocation"] == vault_id:
                 coin["allocation"] = None
 
     def risk_status(self, block_height):
@@ -956,7 +912,7 @@ class StateMachine:
             if y != 0:
                 under_requirement.append(y)
         # For delegation
-        available = [coin for coin in self.fbcoins if coin["allocation"] == None]
+        available = [coin for coin in self.fbcoins if coin["allocation"] is None]
         delegation_requires = sum(self.fb_coins_dist(block_height)) - sum(
             [coin["amount"] for coin in available]
         )
