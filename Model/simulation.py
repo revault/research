@@ -588,6 +588,7 @@ class Simulation(object):
             report += f"Total cumulative cancel fee cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
             report += f"Total cumulative consolidate-fanout fee cost: {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
             report += f"Total cumulative refill fee cost: {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
+            report += f"Total cumulative cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]+cumulative_costs_df['CF Fee'].iloc[-1]+cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
 
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve
