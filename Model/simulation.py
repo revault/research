@@ -4,7 +4,7 @@ import random
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
-from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
+from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
 from statemachine import StateMachine
 
 
@@ -365,12 +365,10 @@ class Simulation(object):
 
         for block in range(start_block, end_block):
             try:
-                # Refill sequence spans 8 blocks, musn't begin another sequence
-                # with period shorter than that.
                 if block % self.refill_period == 0:  # once per refill period
                     self.refill_sequence(block)
 
-                # Fixme: assumes self.delegation_period > 20
+                # FIXME: make delegation_period a spend_rate instead!
                 if (
                     block % self.delegation_period == 20
                 ):  # once per delegation period on the 20th block
@@ -382,13 +380,11 @@ class Simulation(object):
                     else:
                         self.spend_sequence(block)
 
-                if block % 144 == 70:  # once per day on the 70th block
-                    if random.random() < self.catastrophe_rate:
-                        self.catastrophe_sequence(block)
-
-                        # Reboot operation after catastrophe
-                        self.initialize_sequence(block + 10)
-            # Stop simulation, exit loop and report results
+                # The catastrophe rate is a rate per day
+                if random.random() < self.catastrophe_rate / BLOCKS_PER_DAY:
+                    self.catastrophe_sequence(block)
+                    # Reboot operation after catastrophe
+                    self.initialize_sequence(block)
             except (AllocationError):
                 self.end_block = block
                 logging.error(f"Allocation error at block {block}")
