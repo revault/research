@@ -32,7 +32,7 @@ class Simulation(object):
         invalid_spend_rate,
         catastrophe_rate,
         with_balance=False,
-        with_vault_excess=False,
+        with_divergence=False,
         with_op_cost=False,
         with_cum_op_cost=False,
         with_overpayments=False,
@@ -70,10 +70,8 @@ class Simulation(object):
         # Simulation configuration
         self.with_balance = with_balance
         self.balances = []
-        self.with_vault_excess = with_vault_excess
-        self.vault_excess_before_cf = []
-        self.vault_excess_after_cf = []
-        self.vault_excess_after_delegation = []
+        self.with_divergence = with_divergence
+        self.divergence = []
         self.with_op_cost = with_op_cost
         self.with_cum_op_cost = with_cum_op_cost
         self.costs = []
@@ -153,6 +151,17 @@ class Simulation(object):
         R += expected_cf_fee
         return int(R)
 
+    def _reserve_divergence(self, block_height):
+        if self.wt.vaults != []:
+            divergence = []
+            frpv = self.wt.fee_reserve_per_vault(block_height)
+            for vault in self.wt.vaults:
+                div = sum([coin["amount"] for coin in vault["fee_reserve"]]) - frpv
+                divergence.append(div)
+            # block, mean div, min div, max div
+            self.divergence.append([block_height, sum(divergence)/len(self.wt.vaults), min(divergence), max(divergence)])
+
+
     def initialize_sequence(self, block_height):
         logging.debug(f"Initialize sequence at block {block_height}")
         # Refill transition
@@ -178,19 +187,6 @@ class Simulation(object):
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_refill.append([block_height, amounts])
 
-            # snapshot vault excesses before CF Tx
-            if self.with_vault_excess:
-                vault_requirement = self.wt.fee_reserve_per_vault(block_height)
-                excesses = []
-                for vault in self.wt.vaults:
-                    excess = (
-                        sum([coin["amount"] for coin in vault["fee_reserve"]])
-                        - vault_requirement
-                    )
-                    if excess > 0:
-                        excesses.append(excess)
-                self.vault_excess_before_cf.append([block_height, excesses])
-
             # Consolidate-fanout transition
             self.cf_fee = self.wt.consolidate_fanout(block_height)
             logging.debug(
@@ -207,19 +203,6 @@ class Simulation(object):
             amount = int(10e10)  # 100 BTC
             self.wt.allocate(self.new_vault_id(), amount, block_height)
             self.vault_count += 1
-
-        # snapshot vault excesses after delegations
-        if self.with_vault_excess:
-            vault_requirement = self.wt.fee_reserve_per_vault(block_height)
-            excesses = []
-            for vault in self.wt.vaults:
-                excess = (
-                    sum([coin["amount"] for coin in vault["fee_reserve"]])
-                    - vault_requirement
-                )
-                if excess > 0:
-                    excesses.append(excess)
-            self.vault_excess_after_delegation.append([block_height, excesses])
 
     def refill_sequence(self, block_height):
         refill_amount = self.amount_needed(block_height, 0)
@@ -243,19 +226,6 @@ class Simulation(object):
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_refill.append([block_height, amounts])
 
-            # snapshot vault excesses before CF Tx
-            if self.with_vault_excess:
-                vault_requirement = self.wt.fee_reserve_per_vault(block_height)
-                excesses = []
-                for vault in self.wt.vaults:
-                    excess = (
-                        sum([coin["amount"] for coin in vault["fee_reserve"]])
-                        - vault_requirement
-                    )
-                    if excess > 0:
-                        excesses.append(excess)
-                self.vault_excess_before_cf.append([block_height, excesses])
-
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
             self.cf_fee = self.wt.consolidate_fanout(block_height + 1)
@@ -267,18 +237,6 @@ class Simulation(object):
             if self.with_coin_pool:
                 amounts = [coin["amount"] for coin in self.wt.fbcoins]
                 self.pool_after_cf.append([block_height + 7, amounts])
-
-            # snapshot vault excesses after CF Tx
-            if self.with_vault_excess:
-                excesses = []
-                for vault in self.wt.vaults:
-                    excess = (
-                        sum([coin["amount"] for coin in vault["fee_reserve"]])
-                        - vault_requirement
-                    )
-                    if excess > 0:
-                        excesses.append(excess)
-                self.vault_excess_after_cf.append([block_height + 7, excesses])
 
             # Top up sequence
             # Top up delegations after confirmation of CF Tx, because consolidating coins
@@ -305,19 +263,6 @@ class Simulation(object):
         except (RuntimeError):
             logging.debug(f"  Allocation transition FAILED for vault {vault_id}")
             raise (AllocationError())
-
-        # snapshot vault excesses after delegation
-        if self.with_vault_excess:
-            vault_requirement = self.wt.fee_reserve_per_vault(block_height)
-            excesses = []
-            for vault in self.wt.vaults:
-                excess = (
-                    sum([coin["amount"] for coin in vault["fee_reserve"]])
-                    - vault_requirement
-                )
-                if excess > 0:
-                    excesses.append(excess)
-            self.vault_excess_after_delegation.append([block_height, excesses])
 
         # choose a random vault to spend
         vaultID = random.choice(self.wt.vaults)["id"]
@@ -492,6 +437,9 @@ class Simulation(object):
                         risk_off = block
                         self.wt_risk_time.append((risk_on, risk_off))
 
+            if self.with_divergence:
+                self._reserve_divergence(block)
+
             if self.with_fb_coins_dist:
                 if block % 1000 == 0:
                     self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
@@ -510,7 +458,7 @@ class Simulation(object):
             int(a)
             for a in [
                 self.with_balance,
-                self.with_vault_excess,
+                self.with_divergence,
                 self.with_op_cost,
                 self.with_cum_op_cost,
                 self.with_overpayments,
@@ -695,80 +643,16 @@ class Simulation(object):
             axes[plot_num].set_xlabel("Block", labelpad=15)
             plot_num += 1
 
-        if (
-            self.with_vault_excess
-            and self.vault_excess_before_cf != []
-            and self.vault_excess_after_cf != []
-            and self.vault_excess_after_delegation != []
-        ):
-            # AS SCATTER
-            # for frame in self.vault_excess_after_cf:
-            #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-            #     excesses_df = DataFrame(tuples, columns=['block', 'amount'])
-            #     # , label="After CF")
-            #     excesses_df.plot.scatter(
-            #         x='block', y='amount', color='r', ax=axes[plot_num])
-            # for frame in self.vault_excess_after_delegation:
-            #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-            #     excesses_df = DataFrame(tuples, columns=['block', 'amount'])
-            #     # , label="After Delegation")
-            #     excesses_df.plot.scatter(
-            #         x='block', y='amount', color='g', ax=axes[plot_num])
-            # for frame in self.vault_excess_before_cf:
-            #     tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-            #     excesses_df = DataFrame(tuples, columns=['block', 'amount'])
-            #     excesses_df.plot.scatter(
-            #         x='block', y='amount', color='b', ax=axes[plot_num])
-            # axes[plot_num].set_ylabel("Vault Excess (Satoshis)", labelpad=15)
-            # axes[plot_num].set_xlabel("Block", labelpad=15)
-            # plot_num += 1
-
-            # Normalised sum of vault excesses
-            # excesses_df = DataFrame(columns=['block', 'amount'])
-            vault_excess_after_cf = []
-            for frame in self.vault_excess_after_cf:
-                vault_excess_after_cf.append(
-                    (frame[0], sum(frame[1]) / self.expected_active_vaults)
-                )
-            excesses_df = DataFrame(
-                vault_excess_after_cf, columns=["block", "After CF"]
-            )
-            excesses_df.plot.scatter(
-                x="block", y="After CF", ax=axes[plot_num], color="r", label="After CF"
-            )
-            vault_excess_after_delegation = []
-            for frame in self.vault_excess_after_delegation:
-                vault_excess_after_delegation.append(
-                    (frame[0], sum(frame[1]) / self.expected_active_vaults)
-                )
-            excesses_df = DataFrame(
-                vault_excess_after_delegation, columns=["block", "After delegation"]
-            )
-            excesses_df.plot.scatter(
-                x="block",
-                y="After delegation",
-                ax=axes[plot_num],
-                color="g",
-                label="After delegation",
-            )
-            vault_excess_before_cf = []
-            for frame in self.vault_excess_before_cf:
-                vault_excess_before_cf.append(
-                    (frame[0], sum(frame[1]) / self.expected_active_vaults)
-                )
-            excesses_df = DataFrame(
-                vault_excess_before_cf, columns=["block", "Before CF"]
-            )
-            excesses_df.plot.scatter(
-                x="block",
-                y="Before CF",
-                ax=axes[plot_num],
-                color="b",
-                label="Before CF",
-            )
-            axes[plot_num].set_title("Mean Excess per Vault")
-            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
+        # Plot vault reserves divergence
+        if self.with_divergence and self.divergence != []:
+            div_df = DataFrame(self.divergence, columns=["Block", "MeanDivergence", "MinDivergence", "MaxDivergence"])
+            div_df.set_index("Block", inplace=True)
+            div_df["MeanDivergence"].plot(ax=axes[plot_num], label="mean divergence", legend=True)
+            div_df["MinDivergence"].plot(ax=axes[plot_num], label="minimum divergence", legend=True)
+            div_df["MaxDivergence"].plot(ax=axes[plot_num], label="max divergence", legend=True)
             axes[plot_num].set_xlabel("Block", labelpad=15)
+            axes[plot_num].set_ylabel("Satoshis", labelpad=15)
+            axes[plot_num].set_title("Vault Divergence \nfrom Requirement")
             plot_num += 1
 
         # Plot WT risk status
