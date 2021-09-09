@@ -28,7 +28,7 @@ class Simulation(object):
         exp_active_vaults,
         refill_excess,
         refill_period,
-        delegation_period,
+        spend_rate,
         invalid_spend_rate,
         catastrophe_rate,
         with_balance=False,
@@ -47,7 +47,7 @@ class Simulation(object):
         # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
         self.refill_excess = refill_excess
         self.refill_period = refill_period
-        self.delegation_period = delegation_period
+        self.spend_rate = spend_rate
 
         # Manager parameters
         self.invalid_spend_rate = invalid_spend_rate
@@ -101,7 +101,7 @@ class Simulation(object):
         Refill excess: {self.refill_excess}\n\
         Expected active vaults: {self.expected_active_vaults}\n\
         Refill period: {self.refill_period}\n\
-        Delegation period: {self.delegation_period}\n\
+        Spend rate: {self.spend_rate}\n\
         Invalid spend rate: {self.invalid_spend_rate}\n\
         Catastrophe rate: {self.catastrophe_rate}\n\
         """
@@ -363,19 +363,22 @@ class Simulation(object):
 
         self.initialize_sequence(start_block)
 
+        # For each block in the range, simulate an action affecting the watchtower
+        # (formally described as a sequence of transitions) based on the configured
+        # probabilities and the historical data of the current block.
+        # Then, populate some data at this block for later analysis (see the plot()
+        # method).
         for block in range(start_block, end_block):
             try:
-                if block % self.refill_period == 0:  # once per refill period
+                # Refill once per refill period
+                if block % self.refill_period == 0:
                     self.refill_sequence(block)
 
-                # FIXME: make delegation_period a spend_rate instead!
-                if (
-                    block % self.delegation_period == 20
-                ):  # once per delegation period on the 20th block
+                # The spend rate is a rate per day
+                if random.random() < self.spend_rate / BLOCKS_PER_DAY:
                     # generate invalid spend, requires cancel
                     if random.random() < self.invalid_spend_rate:
                         self.cancel_sequence(block)
-
                     # generate valid spend, requires processing
                     else:
                         self.spend_sequence(block)
