@@ -281,14 +281,13 @@ class StateMachine:
 
     def is_negligible(self, coin, block_height):
         """A coin is considered negligible if its amount is less than the minimum
-        of Vm and the fee required to bump a Cancel transaction by 10 sats per vByte
+        of Vm and the fee required to bump a Cancel transaction by 1 sat per vByte
         in the worst case (when the fee rate is equal to the reserve rate).
         Note: t1 is same as the lower bound of Vb.
         """
         assert isinstance(coin["amount"], int)
-        # FIXME: What is a reasonable factor of a 'negligible coin'?
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(10, "cancel", 0)
+        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(1, "cancel", 0)
         t2 = self.Vm(block_height)
         minimum = min(t1, t2)
         if coin["amount"] <= minimum:
@@ -325,15 +324,15 @@ class StateMachine:
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
-        This version grabs all the coins that either haven't been processed yet, are
-        negligible, or are not allocated and have been processed a long time ago.
+        This version grabs all the coins that either haven't been processed yet 
+        or are negligible.
 
         Return: total amount of consumed inputs, number of inputs
         """
         num_inputs = 0
         total_unprocessed = 0
 
-        # FIXME: don't loop 3 times! Also may be more efficient to re-create the list
+        # FIXME: don't loop 2 times! Also may be more efficient to re-create the list
         # instead of removing that much.
         # loop over copy of the list since the remove() method changes list indexing
         for coin in list(self.fbcoins):
@@ -357,16 +356,16 @@ class StateMachine:
     def grab_coins_2(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
-        - unprocessed
-        - not in O(t) with tolerance of X%
+
+        This version grabs all coins that are unprocessed, all 
+        unallocated coins that are not in the target coin distribution 
+        with a tolerance of X% (where X% == self.I_2_tol*100), and
+        if the fee-rate is low, all negligible coins
 
         Return: total amount of consumed inputs, number of inputs
         """
         fb_coins = self.fb_coins_dist(block_height)
         num_inputs = 0
-
-        num_allocated = 0
-        allocated_consumed = 0
 
         # Take all fbcoins that haven't been processed, get their total amount,
         # and remove them from self.fbcoins
@@ -378,12 +377,12 @@ class StateMachine:
                 self._remove_coin(coin)
                 num_inputs += 1
 
-        # Take all fbcoins that aren't in O(t) within the tolerance, and
+        # Take all unallocated fbcoins that aren't in O(t) within the tolerance, and
         # remove them from self.fbcoins
         total_diverged = 0
         tol = self.I_2_tol
-        dist = set(self.fb_coins_dist(block_height)) # remove repeated values
-        for coin in list(self.fbcoins):
+        dist = set(self.fb_coins_dist(block_height)) # set removes repeated values
+        for coin in [fbcoin for fbcoin in self.fbcoins if fbcoin["allocation"] is None]:
             coin_ok = False
             for x in dist:
                 if (1-tol)*x <= coin["amount"] <= (1+tol)*x:
@@ -395,13 +394,27 @@ class StateMachine:
                 total_diverged += coin["amount"]
                 self._remove_coin(coin)
                 num_inputs += 1
-                if coin["allocation"] is not None:
-                    num_allocated += 1
-                    allocated_consumed += coin["amount"]
+
+        low_feerate = self._feerate(block_height) <= 5
+        if low_feerate:
+            vault_diminished = dict()
+            # Take all fbcoins that are negligible, get their total amount, and remove
+            # them from self.fbcoins and their associated vault's fee_reserve
+            total_negligible = 0
+            for coin in list(self.fbcoins):
+                if self.is_negligible(coin, block_height):
+                    total_negligible += coin["amount"]
+                    self._remove_coin(coin)
+                    num_inputs += 1
+                    if coin["allocation"] is not None:
+                        try:
+                            vault_diminished[coin["allocation"]] += coin["amount"]
+                        except(KeyError):
+                            vault_diminished[coin["allocation"]] = coin["amount"]
+            if vault_diminished != {}:
+                logging.debug(f"    I2 consumed from the following vaults: \n{vault_diminished}")
 
         total_to_consume = total_unprocessed + total_diverged
-        logging.debug(f"    I2 consumed in total: {num_inputs} inputs with {total_to_consume}  sats.")
-        logging.debug(f"    I2 consumed: {num_allocated} allocated inputs with a total of {allocated_consumed} sats.")
 
         return total_to_consume, num_inputs
 
