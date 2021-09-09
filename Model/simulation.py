@@ -12,6 +12,10 @@ class AllocationError(Exception):
     pass
 
 
+class NoVaultToSpend(RuntimeError):
+    pass
+
+
 class Simulation(object):
     """Simulator for fee-reserve management of a Revault Watchtower."""
 
@@ -292,6 +296,9 @@ class Simulation(object):
 
     def spend_sequence(self, block_height):
         logging.debug(f"Spend sequence at block {block_height}")
+        if len(self.wt.list_vaults()) == 0:
+            raise NoVaultToSpend
+
         vaultID = self._spend_init(block_height)
         # Spend transition
         logging.debug(f"  Spend transition at block {block_height}")
@@ -304,6 +311,9 @@ class Simulation(object):
 
     def cancel_sequence(self, block_height):
         logging.debug(f"Cancel sequence at block {block_height}")
+        if len(self.wt.list_vaults()) == 0:
+            raise NoVaultToSpend
+
         vault_id = self._spend_init(block_height)
         # Cancel transition
         cancel_inputs = self.wt.process_cancel(vault_id, block_height)
@@ -327,6 +337,9 @@ class Simulation(object):
             self.overpayments.append([block_height, self.cancel_fee - feerate])
 
     def catastrophe_sequence(self, block_height):
+        if len(self.wt.list_vaults()) == 0:
+            raise NoVaultToSpend
+
         # Topup sequence
         self.top_up_sequence(block_height)
 
@@ -378,14 +391,23 @@ class Simulation(object):
                 if random.random() < self.spend_rate / BLOCKS_PER_DAY:
                     # generate invalid spend, requires cancel
                     if random.random() < self.invalid_spend_rate:
-                        self.cancel_sequence(block)
+                        try:
+                            self.cancel_sequence(block)
+                        except NoVaultToSpend:
+                            logging.debug("Failed to Cancel, no vault to spend")
                     # generate valid spend, requires processing
                     else:
-                        self.spend_sequence(block)
+                        try:
+                            self.spend_sequence(block)
+                        except NoVaultToSpend:
+                            logging.debug("Failed to Spend, no vault to spend")
 
                 # The catastrophe rate is a rate per day
                 if random.random() < self.catastrophe_rate / BLOCKS_PER_DAY:
-                    self.catastrophe_sequence(block)
+                    try:
+                        self.catastrophe_sequence(block)
+                    except NoVaultToSpend:
+                        logging.debug("Failed to Cancel (catastrophe), no vault to spend")
                     # Reboot operation after catastrophe
                     self.initialize_sequence(block)
             except (AllocationError):
@@ -815,7 +837,6 @@ class Simulation(object):
         if show:
             plt.show()
 
-
 # FIXME: eventually have some small pytests
 if __name__ == "__main__":
 
@@ -832,7 +853,7 @@ if __name__ == "__main__":
         exp_active_vaults=5,
         refill_excess=4 * 5,
         refill_period=1008,
-        delegation_period=144,
+        spend_rate=1,
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
         with_balance=False,
