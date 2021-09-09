@@ -24,6 +24,7 @@ class Simulation(object):
         estimate_strat,
         o_version,
         i_version,
+        allocate_version,
         exp_active_vaults,
         refill_excess,
         refill_period,
@@ -61,6 +62,7 @@ class Simulation(object):
             estimate_strat,
             o_version,
             i_version,
+            allocate_version,
         )
         self.vault_count = 0
         self.vault_id = 0
@@ -442,8 +444,9 @@ class Simulation(object):
 
             if self.with_balance:
                 self.balances.append(
-                    [block, self.wt.balance(), self.required_reserve(block)]
+                    [block, self.wt.balance(), self.required_reserve(block), self.wt.unallocated_balance()]
                 )
+
             if self.with_risk_status:
                 status = self.wt.risk_status(block)
                 if (status["vaults_at_risk"] != 0) or (
@@ -526,7 +529,7 @@ class Simulation(object):
         # Plot WT balance vs total required reserve
         if self.with_balance and self.balances != []:
             bal_df = DataFrame(
-                self.balances, columns=["block", "balance", "required reserve"]
+                self.balances, columns=["block", "balance", "required reserve", "unallocated balance"]
             )
             bal_df.set_index(["block"], inplace=True)
             bal_df.plot(ax=axes[plot_num], title="WT Balance", legend=True)
@@ -585,6 +588,7 @@ class Simulation(object):
             report += f"Total cumulative cancel fee cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
             report += f"Total cumulative consolidate-fanout fee cost: {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
             report += f"Total cumulative refill fee cost: {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
+            report += f"Total cumulative cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]+cumulative_costs_df['CF Fee'].iloc[-1]+cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
 
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve

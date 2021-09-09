@@ -40,7 +40,7 @@ axes.spines.top : False
 axes.grid: True
 figure.titlesize: 18
 
-savefig.dpi: 150      # figure dots per inch or 'figure'
+savefig.dpi: 300      # figure dots per inch or 'figure'
 savefig.facecolor: w        # figure face color when saving
 savefig.edgecolor: w        # figure edge color when saving
 savefig.format:    png         # {png, ps, pdf, svg}
