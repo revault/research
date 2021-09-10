@@ -196,7 +196,7 @@ class Simulation(object):
             )
 
             # Track operational costs
-            # FIXME: 2in 2out
+            # TODO: 2in 2out
             try:
                 self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
             # FIXME: why key error?

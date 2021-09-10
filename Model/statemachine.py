@@ -11,7 +11,9 @@ TODO:
 import logging
 import numpy as np
 from copy import deepcopy
+from enum import Enum
 from pandas import read_csv
+from transactions import ConsolidateFanoutTx
 from utils import (
     P2WPKH_INPUT_SIZE,
     P2WPKH_OUTPUT_SIZE,
@@ -27,6 +29,14 @@ class CfError(RuntimeError):
 
     def __init__(self, message):
         self.message = message
+
+
+class ProcessingState(Enum):
+    """The state of feebump coin"""
+
+    UNPROCESSED = 0
+    PENDING = 1
+    CONFIRMED = 2
 
 
 class Vault:
@@ -70,19 +80,22 @@ class Vault:
 class FeebumpCoin:
     """A coin in the WT wallet that will eventually be used to feebump."""
 
-    def __init__(self, _id, amount, fan_block=None):
+    def __init__(
+        self, _id, amount, processing_state=ProcessingState.UNPROCESSED, fan_block=None
+    ):
         assert isinstance(amount, int) and isinstance(_id, int)
         self.id = _id
         self.amount = amount
-        # The block at which it was created by the CF tx, tracked because of
-        # grab_coins_1
+        self.processing_state = processing_state
+        # If confirmed, the block at which it was created by the CF tx,
+        # tracked because of grab_coins_1
         self.fan_block = fan_block
 
     def __repr__(self):
         return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block})"
 
-    def is_processed(self):
-        return self.fan_block is not None
+    def is_confirmed(self):
+        return self.processing_state == ProcessingState.CONFIRMED
 
     def increase_amount(self, value_increase):
         self.amount += value_increase
@@ -123,7 +136,7 @@ class CoinPool:
         return [
             c
             for c in self.coins.values()
-            if c.is_processed() and c.id not in self.allocation_map
+            if c.is_confirmed() and c.id not in self.allocation_map
         ]
 
     def allocate_coin(self, coin, vault):
@@ -134,9 +147,15 @@ class CoinPool:
     def deallocate_coin(self, coin):
         del self.allocation_map[coin.id]
 
-    def add_coin(self, amount, fan_block=None, allocated_vault_id=None):
+    def add_coin(
+        self,
+        amount,
+        processing_state=ProcessingState.UNPROCESSED,
+        fan_block=None,
+        allocated_vault_id=None,
+    ):
         coin_id = self.new_coin_id()
-        self.coins[coin_id] = FeebumpCoin(coin_id, amount, fan_block)
+        self.coins[coin_id] = FeebumpCoin(coin_id, amount, processing_state, fan_block)
         if allocated_vault_id is not None:
             assert isinstance(allocated_vault_id, int)
             self.allocation_map[coin_id] = allocated_vault_id
@@ -169,6 +188,8 @@ class StateMachine:
         self.coin_pool = CoinPool()
         # List of relevant unconfirmed transactions: [Tx, Tx, Tx,...]
         self.mempool = []
+        # Unconfirmed ConsolidateFanout transactions
+        self.pending_cf_txs = []
 
         self.hist_df = read_csv(
             hist_feerate_csv, parse_dates=True, index_col="block_height"
@@ -320,6 +341,13 @@ class StateMachine:
             self._feerate_reserve_per_vault(block_height), "cancel", 0
         )
 
+    def is_tx_confirmed(self, tx, height):
+        """We consider a transaction to have been confirmed in this block if its
+        feerate was above the min feerate in this block."""
+        # FIXME: this is wrong!! min feerate is always 0 or 1 because sponsored txs!
+        min_feerate = self.hist_df["min_feerate"]
+        return tx.feerate > min_feerate
+
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
         if self.Vm_cache[0] == block_height:
@@ -411,7 +439,7 @@ class StateMachine:
         else:
             return False
 
-    def finalize_refill(self, tx):
+    def refill(self, tx):
         """Refill the WT by generating a new feebump coin worth 'amount', with no allocation."""
         for c in tx.outs:
             self.coin_pool.add_coin(c.amount)
@@ -432,7 +460,7 @@ class StateMachine:
         or are negligible.
         """
         return self.remove_coins(
-            lambda coin: not coin.is_processed()
+            lambda coin: coin.is_confirmed()
             or self.is_negligible(coin, block_height)
         )
 
@@ -455,7 +483,7 @@ class StateMachine:
             return False
 
         def coin_filter(coin):
-            if not coin.is_processed():
+            if coin.is_confirmed():
                 return True
 
             if not self.coin_pool.is_allocated(coin):
@@ -487,7 +515,7 @@ class StateMachine:
         min_fbcoin_value = self.min_fbcoin_value(height)
 
         def coin_filter(coin):
-            if not coin.is_processed():
+            if not coin.is_confirmed():
                 return True
 
             # FIXME: This often will consume the Vm coin of a fee-reserve, which is our
@@ -581,7 +609,13 @@ class StateMachine:
 
             num_new_reserves += 1
             for x in target_coin_dist:
-                added_coins.append(self.coin_pool.add_coin(x, fan_block=block_height))
+                added_coins.append(
+                    self.coin_pool.add_coin(
+                        x,
+                        processing_state=ProcessingState.PENDING,
+                        fan_block=block_height,
+                    )
+                )
 
         if num_new_reserves == 0:
             logging.debug(
@@ -617,7 +651,7 @@ class StateMachine:
                 for _ in range(added_coins_count):
                     added_coins.append(
                         self.coin_pool.add_coin(
-                            added_coin_value, fan_block=block_height
+                            added_coin_value, processing_state=ProcessingState.PENDING, fan_block=block_height
                         )
                     )
                 cf_tx_fee += outputs_fee
@@ -628,6 +662,10 @@ class StateMachine:
             increase = remainder // num_outputs
             for coin in added_coins:
                 coin.increase_amount(increase)
+
+        self.pending_cf_txs.append(
+            ConsolidateFanoutTx(block_height, coins, added_coins)
+        )
 
         return cf_tx_fee
 
