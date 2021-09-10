@@ -377,7 +377,7 @@ class Simulation(object):
             amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_catastrophe.append([block_height, amounts])
 
-    def confirm_sequence(self):
+    def confirm_sequence(self, height):
         """State transition which considers each tx in WT's mempool and checks if the offered
         fee-rate is sufficient.
         If so, applies the transaction to the state.
@@ -385,11 +385,11 @@ class Simulation(object):
         """
         for tx in self.wt.unconfirmed_transactions():
             if isinstance(tx, ConsolidateFanoutTx):
-                self.wt.finalize_cf(tx)
+                self.wt.finalize_cf(tx, height)
             elif isinstance(tx, CancelTx):
-                self.wt.finalize_cancel(tx)
+                self.wt.finalize_cancel(tx, height)
             elif isinstance(tx, SpendTx):
-                self.wt.finalize_spend(tx)
+                self.wt.finalize_spend(tx, height)
             else:
                 raise
 
@@ -409,6 +409,9 @@ class Simulation(object):
         # Then, populate some data at this block for later analysis (see the plot()
         # method).
         for block in range(start_block, end_block):
+            # First of all, was any transaction confirmed in this block?
+            self.confirm_sequence(block)
+
             try:
                 # Refill once per refill period
                 if block % self.refill_period == 0:
