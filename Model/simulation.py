@@ -9,14 +9,14 @@ import random
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
+from statemachine import StateMachine
+from transactions import ConsolidateFanoutTx, CancelTx, SpendTx
 from utils import (
     cf_tx_size,
     P2WPKH_INPUT_SIZE,
     P2WPKH_OUTPUT_SIZE,
     BLOCKS_PER_DAY,
-    Transaction,
 )
-from statemachine import StateMachine
 
 
 class AllocationError(Exception):
