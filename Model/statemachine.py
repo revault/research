@@ -19,6 +19,7 @@ from utils import (
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
     TX_OVERHEAD_SIZE,
+    Transaction,
 )
 
 
@@ -32,12 +33,14 @@ class CfError(RuntimeError):
 class Vault:
     """A vault the WT is watching for."""
 
-    def __init__(self, _id, amount):
+    def __init__(self, _id, amount, status="ready"):
         assert isinstance(amount, int) and isinstance(_id, int)
         self.id = _id
         self.amount = amount
         # The feebump coins that were allocated to this vault
         self.fb_coins = {}
+        # status used to track whether vault should be considered during other state transitions
+        self.status = status
 
     def __repr__(self):
         return f"Vault(id={self.id}, amount={self.amount}, coins={self.fb_coins})"
@@ -57,6 +60,12 @@ class Vault:
 
     def reserve_balance(self):
         return sum(c.amount for c in self.fb_coins.values())
+
+    def set_status(self, status):
+        if status not in ["ready", "spending", "canceling"]:
+            raise ValueError
+        else:
+            self.status = status
 
 
 class FeebumpCoin:
@@ -159,6 +168,8 @@ class StateMachine:
         self.n_man = n_man
         self.vaults = {}
         self.coin_pool = CoinPool()
+        # List of relevant unconfirmed transactions: [Tx, Tx, Tx,...]
+        self.mempool = []
 
         self.hist_df = read_csv(
             hist_feerate_csv, parse_dates=True, index_col="block_height"
@@ -401,10 +412,10 @@ class StateMachine:
         else:
             return False
 
-    def refill(self, amount):
+    def finalize_refill(self, tx):
         """Refill the WT by generating a new feebump coin worth 'amount', with no allocation."""
-        assert isinstance(amount, int)
-        self.coin_pool.add_coin(amount)
+        for c in tx.outs:
+            self.coin_pool.add_coin(c.amount)
 
     def grab_coins_0(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -500,8 +511,14 @@ class StateMachine:
         feerate = self._feerate_reserve_per_vault(height)
         return int(feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(5, "cancel", 0))
 
-    def consolidate_fanout(self, block_height):
-        """Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
+    def broadcast_consolidate_fanout(self, block_height):
+        """
+        FIXME: Instead of removing coins, add them as inputs to a CF Tx. Don't remove any coins
+        if the vault status is "Canceling" (or "Spending"??). Instead of adding coins to the coin_pool,
+        add them as outputs to the CF Tx. Add the CF Tx to the mempool.
+
+
+        Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
         new re-fills that enable accurate feebumping and 2) to consolidate negligible feebump coins
         if the current feerate is "low".
 
@@ -615,6 +632,14 @@ class StateMachine:
 
         return cf_tx_fee
 
+    def finalize_consolidate_fanout(self, tx):
+        """Confirm cosnolidate_fanout tx and update the coin pool."""
+        if tx.get_fee() < feerate and tx.type is not "CF":
+            raise (TypeError)
+        for coin in tx.outs:
+            self.coin_pool.add_coin(coin)
+
+    # FIXME: cleanup this function..
     def _allocate_0(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
@@ -730,8 +755,14 @@ class StateMachine:
         if self.allocate_version == 0:
             self._allocate_0(vault_id, amount, block_height)
 
-    def process_cancel(self, vault_id, block_height):
-        """The cancel must be updated with a fee (the large Vm allocated to it).
+    def broadcast_cancel(self, vault_id, block_height):
+        """Construct and broadcast the cancel tx.
+
+        FIXME: Instead of removing selected coins, add them as inputs
+        to a cancel tx. Add the cancel tx to the mempool. Set the vault's status
+        to "canceling".
+
+        The cancel must be updated with a fee (the large Vm allocated to it).
         If this fee is unsuccessful at pushing the cancel through, additional small coins may
         be added from the fee_reserve.
         """
@@ -794,17 +825,39 @@ class StateMachine:
 
         return cancel_fb_inputs
 
-    def finalize_cancel(self, vault_id):
+    def finalize_cancel(self, tx):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
         become unallocated. The vault with vault_id is removed from vaults.
         """
+        # FIXME: should we have a map of txs in mempool to vaults instead of this hack?
+        vault_id = tx.ins.values()[0].id
         self.remove_vault(self.vaults[vault_id])
 
-    def process_spend(self, vault_id):
+    def spend_broadcast(self, vault_id):
+        """Handle a broadcasted spend transaction"""
+        self.vaults[vault_id].set_status("Spending")
+
+    def finalize_spend(self, tx):
         """Once a vault is consumed with a spend, the fee-reserve that was allocated to it
         becomes un-allocated and the vault is removed from the set of vaults.
         """
+        # FIXME: should we have a map of txs in mempool to vaults instead of this hack?
+        vault_id = tx.ins.values()[0].id
         self.remove_vault(self.vaults[vault_id])
+
+    def feebump(self, tx):
+        """Uses the inputs in the cancel tx and the remaining coins in the vault's
+        fb_coins to construct a replacement cancel tx.
+        """
+        pass
+
+    def replace_cancel(self, tx):
+        """Broadcasts a replacement cancel transaction. Updates the coin_pool
+        and the associated vault.
+        FIXME: How should inputs that were in the first version of the cancel
+        but not in the replacement be handled?
+        """
+        pass
 
     def risk_status(self, block_height):
         """Return a summary of the risk status for the set of vaults being watched."""
