@@ -556,12 +556,13 @@ class StateMachine:
         ), "We must never try to create more fb coins than we can afford to"
 
         # If we have more than we need for the CF fee..
-        if remainder > cf_tx_fee:
+        remainder -= cf_tx_fee
+        if remainder > 0:
             # .. First try to opportunistically add a new fb coin
             # FIXME: maybe add more than one?
             added_coin_value = self.min_fbcoin_value(block_height)
-            if remainder - cf_tx_fee > added_coin_value + P2WPKH_OUTPUT_SIZE * feerate:
-                self._add_coin(added_coin_value, processed=block_height)
+            if remainder > added_coin_value + P2WPKH_OUTPUT_SIZE * feerate:
+                self._add_coin(remainder, processed=block_height)
                 return cf_tx_fee + P2WPKH_OUTPUT_SIZE * feerate
 
             # And fallback to distribute the excess across the created fb coins
