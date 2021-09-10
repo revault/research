@@ -10,8 +10,8 @@ class Transaction:
         self.txouts = txouts
 
     def fee(self):
-        input_total = sum([c.amount for c in self.ins])
-        output_total = sum([c.amount for c in self.outs])
+        input_total = sum([c.amount for c in self.txins])
+        output_total = sum([c.amount for c in self.txouts])
         fee = input_total - output_total
         return fee
 
