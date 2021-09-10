@@ -209,7 +209,7 @@ class Simulation(object):
                 self.pool_after_refill.append([block_height, amounts])
 
             # Consolidate-fanout transition
-            self.cf_fee = self.wt.consolidate_fanout(block_height)
+            self.cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
             logging.debug(
                 f"  Consolidate-fanout transition at block {block_height} with fee:"
                 f" {self.cf_fee}"
@@ -250,7 +250,7 @@ class Simulation(object):
 
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
-            self.cf_fee = self.wt.consolidate_fanout(block_height)
+            self.cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
             logging.debug(
                 f"  Consolidate-fanout transition at block {block_height} with fee:"
                 f" {self.cf_fee}"
@@ -383,18 +383,15 @@ class Simulation(object):
         If so, applies the transaction to the state.
         If not, handles rejection for cancel transaction type or does nothing for others.
         """
-        for tx in self.wt.mempool:
-            if tx.type == "Refill":
-                self.wt.finalize_refill(tx)
-            if tx.type == "CF":
+        for tx in self.wt.unconfirmed_transactions():
+            if isinstance(tx, ConsolidateFanoutTx):
                 self.wt.finalize_cf(tx)
-            if tx.type == "Cancel":
-                try:
-                    self.wt.finalize_cancel(tx)
-                except:
-                    self.wt.replace_cancel(tx)
-            if tx.type == "Spend":
+            elif isinstance(tx, CancelTx):
+                self.wt.finalize_cancel(tx)
+            elif isinstance(tx, SpendTx):
                 self.wt.finalize_spend(tx)
+            else:
+                raise
 
     def run(self, start_block, end_block):
         """Iterate from {start_block} to {end_block}, executing transitions
