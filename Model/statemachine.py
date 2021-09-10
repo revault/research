@@ -13,7 +13,7 @@ import numpy as np
 from copy import deepcopy
 from enum import Enum
 from pandas import read_csv
-from transactions import ConsolidateFanoutTx
+from transactions import CancelTx, ConsolidateFanoutTx, SpendTx
 from utils import (
     P2WPKH_INPUT_SIZE,
     P2WPKH_OUTPUT_SIZE,
@@ -39,10 +39,18 @@ class ProcessingState(Enum):
     CONFIRMED = 2
 
 
+class VaultState(Enum):
+    """Whether a vault is being"""
+
+    READY = 0
+    SPENDING = 1
+    CANCELING = 2
+
+
 class Vault:
     """A vault the WT is watching for."""
 
-    def __init__(self, _id, amount, status="ready"):
+    def __init__(self, _id, amount, status=VaultState.READY):
         assert isinstance(amount, int) and isinstance(_id, int)
         self.id = _id
         self.amount = amount
@@ -71,10 +79,11 @@ class Vault:
         return sum(c.amount for c in self.fb_coins.values())
 
     def set_status(self, status):
-        if status not in ["ready", "spending", "canceling"]:
-            raise ValueError
-        else:
-            self.status = status
+        assert isinstance(status, VaultState)
+        self.status = status
+
+    def is_available(self):
+        return self.status == VaultState.READY
 
 
 class FeebumpCoin:
@@ -667,9 +676,7 @@ class StateMachine:
             for coin in added_coins:
                 coin.increase_amount(increase)
 
-        self.mempool.append(
-            ConsolidateFanoutTx(block_height, coins, added_coins)
-        )
+        self.mempool.append(ConsolidateFanoutTx(block_height, coins, added_coins))
 
         return cf_tx_fee
 
@@ -812,6 +819,8 @@ class StateMachine:
         )
         if vault is None:
             raise RuntimeError(f"No vault found with id {vault_id}")
+        # FIXME: i think this doesn't hold
+        assert vault.is_available(), "FIXME"
 
         try:
             init_fee = self._estimate_smart_feerate(block_height)
@@ -864,27 +873,39 @@ class StateMachine:
                 init_fee -= fbcoin.amount
                 cancel_fb_inputs.append(fbcoin)
 
+        vault.set_status(VaultState.CANCELING)
+        self.mempool.append(CancelTx(block_height, cancel_fb_inputs, []))
+
         return cancel_fb_inputs
 
-    def finalize_cancel(self, tx):
+    def finalize_cancel(self, tx, height):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
         become unallocated. The vault with vault_id is removed from vaults.
         """
-        # FIXME: should we have a map of txs in mempool to vaults instead of this hack?
-        vault_id = tx.ins.values()[0].id
-        self.remove_vault(self.vaults[vault_id])
+        if self.is_tx_confirmed(tx, height):
+            # The vault it was allocated to is the one the fb coins, as txins of this tx
+            # were allocated to. Use this instead of adding yet another mapping.
+            vault_id = tx.ins.values()[0].id
+            self.remove_vault(self.vaults[vault_id])
+            self.mempool.remove(tx)
 
-    def spend_broadcast(self, vault_id):
+    def broadcast_spend(self, vault_id, height):
         """Handle a broadcasted spend transaction"""
-        self.vaults[vault_id].set_status("Spending")
+        # FIXME: i think this doesn't hold
+        assert self.vaults[vault_id].is_available(), "FIXME"
+        self.vaults[vault_id].set_status(VaultState.SPENDING)
+        self.mempool.append(SpendTx(height, [], []))
 
-    def finalize_spend(self, tx):
+    def finalize_spend(self, tx, height):
         """Once a vault is consumed with a spend, the fee-reserve that was allocated to it
         becomes un-allocated and the vault is removed from the set of vaults.
         """
-        # FIXME: should we have a map of txs in mempool to vaults instead of this hack?
-        vault_id = tx.ins.values()[0].id
-        self.remove_vault(self.vaults[vault_id])
+        if self.is_tx_confirmed(tx, height):
+            # The vault it was allocated to is the one the fb coins, as txins of this tx
+            # were allocated to. Use this instead of adding yet another mapping.
+            vault_id = tx.ins.values()[0].id
+            self.remove_vault(self.vaults[vault_id])
+            self.mempool.remove(tx)
 
     def feebump(self, tx):
         """Uses the inputs in the cancel tx and the remaining coins in the vault's
