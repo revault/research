@@ -313,7 +313,7 @@ class Simulation(object):
         vaultID = self._spend_init(block_height)
         # Spend transition
         logging.debug(f"  Spend transition at block {block_height}")
-        self.wt.process_spend(vaultID)
+        self.wt.broadcast_spend(vaultID)
 
         # snapshot coin pool after spend attempt
         if self.with_coin_pool:
@@ -327,7 +327,7 @@ class Simulation(object):
 
         vault_id = self._spend_init(block_height)
         # Cancel transition
-        cancel_inputs = self.wt.process_cancel(vault_id, block_height)
+        cancel_inputs = self.wt.broadcast_cancel(vault_id, block_height)
         self.wt.finalize_cancel(vault_id)
         self.cancel_fee = sum(coin.amount for coin in cancel_inputs)
         logging.debug(
@@ -357,7 +357,7 @@ class Simulation(object):
         logging.debug(f"Catastrophe sequence at block {block_height}")
         for vault in self.wt.list_vaults():
             # Cancel transition
-            cancel_inputs = self.wt.process_cancel(vault.id, block_height)
+            cancel_inputs = self.wt.broadcast_cancel(vault.id, block_height)
             self.wt.finalize_cancel(vault.id)
             # If a cancel fee has already been paid this block, sum those fees
             # so that when plotting costs this will appear as one total operation
