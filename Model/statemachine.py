@@ -109,6 +109,10 @@ class FeebumpCoin:
     def increase_amount(self, value_increase):
         self.amount += value_increase
 
+    def confirm(self, height):
+        self.processing_state == ProcessingState.CONFIRMED
+        self.fan_block = height
+
 
 class CoinPool:
     """A set of feebump coins that the WT operates."""
@@ -170,8 +174,8 @@ class CoinPool:
             self.allocation_map[coin_id] = allocated_vault_id
         return self.coins[coin_id]
 
-    def confirm_coin(self, coin):
-        self.coins[coin.id].processing_state = ProcessingState.CONFIRMED
+    def confirm_coin(self, coin, fan_height):
+        self.coins[coin.id].confirm(fan_height)
 
     def remove_coin(self, coin):
         """Remove a coin from the pool by value"""
@@ -684,7 +688,7 @@ class StateMachine:
         """Confirm cosnolidate_fanout tx and update the coin pool."""
         if self.is_tx_confirmed(tx, height):
             for coin in tx.txouts:
-                self.coin_pool.confirm_coin(coin)
+                self.coin_pool.confirm_coin(coin, height)
             self.mempool.remove(tx)
 
     # FIXME: cleanup this function..
