@@ -358,8 +358,10 @@ class StateMachine:
         """We consider a transaction to have been confirmed in this block if its
         feerate was above the min feerate in this block."""
         # FIXME: this is wrong!! min feerate is always 0 or 1 because sponsored txs!
-        min_feerate = self.hist_df["min_feerate"]
-        return tx.feerate > min_feerate
+        min_feerate = self.hist_df["min_feerate"][height]
+        min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
+        print(tx.feerate, min_feerate)
+        return tx.feerate() > min_feerate
 
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
@@ -668,22 +670,20 @@ class StateMachine:
                         )
                     )
                 cf_tx_fee += outputs_fee
-                return cf_tx_fee
-
-            # And fallback to distribute the excess across the created fb coins
-            num_outputs = num_new_reserves * len(target_coin_dist)
-            increase = remainder // num_outputs
-            for coin in added_coins:
-                coin.increase_amount(increase)
+            else:
+                # And fallback to distribute the excess across the created fb coins
+                num_outputs = num_new_reserves * len(target_coin_dist)
+                increase = remainder // num_outputs
+                for coin in added_coins:
+                    coin.increase_amount(increase)
 
         self.mempool.append(ConsolidateFanoutTx(block_height, coins, added_coins))
-
         return cf_tx_fee
 
     def finalize_consolidate_fanout(self, tx, height):
         """Confirm cosnolidate_fanout tx and update the coin pool."""
         if self.is_tx_confirmed(tx, height):
-            for coin in tx.outs:
+            for coin in tx.txouts:
                 self.coin_pool.confirm_coin(coin)
             self.mempool.remove(tx)
 
