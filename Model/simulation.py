@@ -220,12 +220,6 @@ class Simulation(object):
                 amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_cf.append([block_height, amounts])
 
-        # Allocation transitions
-        for i in range(0, self.expected_active_vaults):
-            amount = int(10e10)  # 100 BTC
-            self.wt.allocate(self.new_vault_id(), amount, block_height)
-            self.vault_count += 1
-
     def refill_sequence(self, block_height):
         refill_amount = self.amount_needed(block_height, 0)
         if refill_amount > 0:
@@ -260,11 +254,6 @@ class Simulation(object):
             if self.with_coin_pool:
                 amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_cf.append([block_height, amounts])
-
-            # Top up sequence
-            # Top up delegations after confirmation of CF Tx, because consolidating coins
-            # can diminish the fee_reserve of a vault
-            self.top_up_sequence(block_height)
 
     def _spend_init(self, block_height):
         # Top up sequence
@@ -386,6 +375,7 @@ class Simulation(object):
         for tx in self.wt.unconfirmed_transactions():
             if isinstance(tx, ConsolidateFanoutTx):
                 self.wt.finalize_cf(tx, height)
+                self.top_up_sequence(height)
             elif isinstance(tx, CancelTx):
                 self.wt.finalize_cancel(tx, height)
             elif isinstance(tx, SpendTx):
