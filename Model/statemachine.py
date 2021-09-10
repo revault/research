@@ -161,6 +161,9 @@ class CoinPool:
             self.allocation_map[coin_id] = allocated_vault_id
         return self.coins[coin_id]
 
+    def confirm_coin(self, coin):
+        self.coins[coin.id].processing_state = ProcessingState.CONFIRMED
+
     def remove_coin(self, coin):
         """Remove a coin from the pool by value"""
         if self.is_allocated(coin):
@@ -188,8 +191,6 @@ class StateMachine:
         self.coin_pool = CoinPool()
         # List of relevant unconfirmed transactions: [Tx, Tx, Tx,...]
         self.mempool = []
-        # Unconfirmed ConsolidateFanout transactions
-        self.pending_cf_txs = []
 
         self.hist_df = read_csv(
             hist_feerate_csv, parse_dates=True, index_col="block_height"
@@ -218,6 +219,9 @@ class StateMachine:
 
     def list_coins(self):
         return list(self.coin_pool.list_coins())
+
+    def unconfirmed_transactions(self):
+        return self.mempool
 
     def remove_coin(self, coin):
         if self.coin_pool.is_allocated(coin):
@@ -439,10 +443,10 @@ class StateMachine:
         else:
             return False
 
-    def refill(self, tx):
+    def refill(self, amount):
         """Refill the WT by generating a new feebump coin worth 'amount', with no allocation."""
-        for c in tx.outs:
-            self.coin_pool.add_coin(c.amount)
+        assert isinstance(amount, int)
+        self.coin_pool.add_coin(amount)
 
     def grab_coins_0(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -663,18 +667,18 @@ class StateMachine:
             for coin in added_coins:
                 coin.increase_amount(increase)
 
-        self.pending_cf_txs.append(
+        self.mempool.append(
             ConsolidateFanoutTx(block_height, coins, added_coins)
         )
 
         return cf_tx_fee
 
-    def finalize_consolidate_fanout(self, tx):
+    def finalize_consolidate_fanout(self, tx, height):
         """Confirm cosnolidate_fanout tx and update the coin pool."""
-        if tx.get_fee() < feerate and tx.type is not "CF":
-            raise (TypeError)
-        for coin in tx.outs:
-            self.coin_pool.add_coin(coin)
+        if self.is_tx_confirmed(tx, height):
+            for coin in tx.outs:
+                self.coin_pool.confirm_coin(coin)
+            self.mempool.remove(tx)
 
     # FIXME: cleanup this function..
     def _allocate_0(self, vault_id, amount, block_height):

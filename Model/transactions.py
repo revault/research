@@ -9,18 +9,21 @@ class Transaction:
         self.txins = txins
         self.txouts = txouts
 
-    def get_fee(self):
+    def fee(self):
         input_total = sum([c.amount for c in self.ins])
         output_total = sum([c.amount for c in self.outs])
         fee = input_total - output_total
         return fee
 
-    def get_size(self):
+    def size(self):
         return (
             TX_OVERHEAD_SIZE
             + len(self.txins) * P2WPKH_INPUT_SIZE
             + len(self.txouts) * P2WPKH_OUTPUT_SIZE
         )
+
+    def feerate(self):
+        return self.fee() / self.size()
 
 
 class ConsolidateFanoutTx(Transaction):
