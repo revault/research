@@ -128,3 +128,28 @@ def cf_tx_size(n_inputs, n_outputs):
     return (
         TX_OVERHEAD_SIZE + n_inputs * P2WPKH_INPUT_SIZE + n_outputs * P2WPKH_OUTPUT_SIZE
     )
+
+
+class Transaction:
+    """A Transaction in the mempool relevant for the WT wallet."""
+
+    def __init__(self, broadcast_block, tx_type, ins={}, outs={}):
+        self.broadcast_block = broadcast_block
+        assert tx_type in ["Refill", "CF", "Cancel", "Spend"]
+        self.type = tx_type
+        self.ins = ins
+        self.outs = outs
+
+    def get_fee(self):
+        input_total = sum([c.amount for c in ins])
+        output_total = sum([c.amount for c in outs])
+        fee = input_total - output_total
+        assert isinstance(fee, int)
+        return fee
+
+    def get_size(self):
+        return (
+            TX_OVERHEAD_SIZE
+            + len(self.ins) * P2WPKH_INPUT_SIZE
+            + len(self.outs) * P2WPKH_OUTPUT_SIZE
+        )
