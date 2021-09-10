@@ -7,6 +7,7 @@ from simulation import Simulation
 
 REPORT_FILENAME = os.getenv("REPORT_FILENAME", None)
 PLOT_FILENAME = os.getenv("PLOT_FILENAME", None)
+PROFILE_FILENAME = os.getenv("PROFILE_FILENAME", None)
 N_STK = os.getenv("N_STK", None)
 N_MAN = os.getenv("N_MAN", None)
 HIST_CSV = os.getenv("HIST_CSV", None)
@@ -78,13 +79,23 @@ if __name__ == "__main__":
     start_block = 200000
     end_block = 681000
 
-    sim.run(start_block, end_block)
+    if PROFILE_FILENAME is not None:
+        import pstats
+        from pstats import SortKey
+        import cProfile
 
-    report = sim.plot(PLOT_FILENAME, True)
-    logging.info(f"Report\n{report}")
+        cProfile.run('sim.run(start_block, end_block)', f'{PROFILE_FILENAME}')
+        p = pstats.Stats(f"{PROFILE_FILENAME}")
+        stats = p.strip_dirs().sort_stats(SortKey.CUMULATIVE).print_stats()
 
-    if REPORT_FILENAME is not None:
-        with open(f"{REPORT_FILENAME}.txt", "w+", encoding="utf-8") as f:
-            f.write(report)
+    else:
+        sim.run(start_block, end_block)
 
-    # sim.plot_fee_history(start_block,end_block, PLOT_FILENAME, True)
+        report = sim.plot(PLOT_FILENAME, True)
+        logging.info(f"Report\n{report}")
+
+        if REPORT_FILENAME is not None:
+            with open(f"{REPORT_FILENAME}.txt", "w+", encoding="utf-8") as f:
+                f.write(report)
+
+        # sim.plot_fee_history(start_block,end_block, PLOT_FILENAME, True)
