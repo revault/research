@@ -131,18 +131,6 @@ class Simulation(object):
         num_vaults = len(self.wt.list_vaults())
         return num_vaults * required_reserve_per_vault
 
-    def broadcast_refill(self, block_height, expected_new_vaults):
-        """Adds a refill transaction to the WT's mempool and returns it"""
-        # FIXME: what about inputs & fee
-        amount = slef.amount_needed(block_height, expected_new_vaults)
-        coin_id = self.wt.coin_pool.new_coin_id()
-        refill_output = FeebumpCoin(coin_id, amount)
-        refill_tx = Transaction(
-            broadcast_block=block_height, tx_type="Refill", ins=[], outs=[refill_output]
-        )
-        self.wt.mempool.append(refill_tx)
-        return refill_tx
-
     def amount_needed(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
         Used by stakeholder wallet software.
