@@ -159,8 +159,14 @@ class Simulation(object):
                 div = vault.reserve_balance() - frpv
                 divergence.append(div)
             # block, mean div, min div, max div
-            self.divergence.append([block_height, sum(divergence)/len(self.wt.list_vaults()), min(divergence), max(divergence)])
-
+            self.divergence.append(
+                [
+                    block_height,
+                    sum(divergence) / len(self.wt.list_vaults()),
+                    min(divergence),
+                    max(divergence),
+                ]
+            )
 
     def initialize_sequence(self, block_height):
         logging.debug(f"Initialize sequence at block {block_height}")
@@ -184,18 +190,19 @@ class Simulation(object):
 
             # snapshot coin pool after refill Tx
             if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_vaults()]
+                amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_refill.append([block_height, amounts])
 
             # Consolidate-fanout transition
             self.cf_fee = self.wt.consolidate_fanout(block_height)
             logging.debug(
-                f"  Consolidate-fanout transition at block {block_height} with fee: {self.cf_fee}"
+                f"  Consolidate-fanout transition at block {block_height} with fee:"
+                f" {self.cf_fee}"
             )
 
             # snapshot coin pool after CF Tx
             if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_vaults()]
+                amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_cf.append([block_height, amounts])
 
         # Allocation transitions
@@ -223,19 +230,20 @@ class Simulation(object):
 
             # snapshot coin pool after refill Tx
             if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_vaults()]
+                amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_refill.append([block_height, amounts])
 
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
             self.cf_fee = self.wt.consolidate_fanout(block_height + 1)
             logging.debug(
-                f"  Consolidate-fanout transition at block {block_height+1} with fee: {self.cf_fee}"
+                f"  Consolidate-fanout transition at block {block_height+1} with fee:"
+                f" {self.cf_fee}"
             )
 
             # snapshot coin pool after CF Tx confirmation
             if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_vaults()]
+                amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_cf.append([block_height + 7, amounts])
 
             # Top up sequence
@@ -273,7 +281,8 @@ class Simulation(object):
             try:
                 # Allocation transition
                 logging.debug(
-                    f"  Allocation transition at block {block_height} to vault {vault.id}"
+                    f"  Allocation transition at block {block_height} to vault"
+                    f" {vault.id}"
                 )
                 assert isinstance(vault.amount, int)
                 self.wt.allocate(vault.id, vault.amount, block_height)
@@ -290,7 +299,7 @@ class Simulation(object):
 
         # snapshot coin pool after spend attempt
         if self.with_coin_pool:
-            amounts = [coin.amount for coin in self.wt.list_vaults()]
+            amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_spend.append([block_height, amounts])
 
     def cancel_sequence(self, block_height):
@@ -306,7 +315,7 @@ class Simulation(object):
 
         # snapshot coin pool after cancel
         if self.with_coin_pool:
-            amounts = [coin.amount for coin in self.wt.list_vaults()]
+            amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_cancel.append([block_height, amounts])
 
         # Compute overpayments
@@ -341,7 +350,7 @@ class Simulation(object):
 
         # snapshot coin pool after all spend attempts are cancelled
         if self.with_coin_pool:
-            amounts = [coin.amount for coin in self.wt.list_vaults()]
+            amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_catastrophe.append([block_height, amounts])
 
     def run(self, start_block, end_block):
@@ -387,7 +396,12 @@ class Simulation(object):
 
             if self.with_balance:
                 self.balances.append(
-                    [block, self.wt.balance(), self.required_reserve(block), self.wt.unallocated_balance()]
+                    [
+                        block,
+                        self.wt.balance(),
+                        self.required_reserve(block),
+                        self.wt.unallocated_balance(),
+                    ]
                 )
 
             if self.with_risk_status:
@@ -475,7 +489,8 @@ class Simulation(object):
         # Plot WT balance vs total required reserve
         if self.with_balance and self.balances != []:
             bal_df = DataFrame(
-                self.balances, columns=["block", "balance", "required reserve", "unallocated balance"]
+                self.balances,
+                columns=["block", "balance", "required reserve", "unallocated balance"],
             )
             bal_df.set_index(["block"], inplace=True)
             bal_df.plot(ax=axes[plot_num], title="WT Balance", legend=True)
@@ -531,10 +546,22 @@ class Simulation(object):
             axes[plot_num].set_title("Cumulative Operating Costs")
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
-            report += f"Total cumulative cancel fee cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
-            report += f"Total cumulative consolidate-fanout fee cost: {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
-            report += f"Total cumulative refill fee cost: {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
-            report += f"Total cumulative cost: {cumulative_costs_df['Cancel Fee'].iloc[-1]+cumulative_costs_df['CF Fee'].iloc[-1]+cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
+            report += (
+                "Total cumulative cancel fee cost:"
+                f" {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
+            )
+            report += (
+                "Total cumulative consolidate-fanout fee cost:"
+                f" {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
+            )
+            report += (
+                "Total cumulative refill fee cost:"
+                f" {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
+            )
+            report += (
+                "Total cumulative cost:"
+                f" {cumulative_costs_df['Cancel Fee'].iloc[-1]+cumulative_costs_df['CF Fee'].iloc[-1]+cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
+            )
 
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve
@@ -577,7 +604,7 @@ class Simulation(object):
                     alpha=0.1,
                     s=5,
                     ax=axes[plot_num],
-                    label="After Refill",
+                    # label="After Refill",
                 )
             for frame in self.pool_after_cf:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
@@ -589,7 +616,7 @@ class Simulation(object):
                     alpha=0.1,
                     s=5,
                     ax=axes[plot_num],
-                    label="After CF",
+                    # label="After CF",
                 )
             for frame in self.pool_after_spend:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
@@ -601,7 +628,7 @@ class Simulation(object):
                     alpha=0.1,
                     s=5,
                     ax=axes[plot_num],
-                    label="After Spend",
+                    # label="After Spend",
                 )
             for frame in self.pool_after_cancel:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
@@ -613,7 +640,7 @@ class Simulation(object):
                     alpha=0.1,
                     s=5,
                     ax=axes[plot_num],
-                    label="After Cancel",
+                    # label="After Cancel",
                 )
             for frame in self.pool_after_catastrophe:
                 tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
@@ -621,13 +648,13 @@ class Simulation(object):
                 pool_df.plot.scatter(
                     x="block",
                     y="amount",
-                    color="o",
+                    color="orange",
                     alpha=0.1,
                     s=5,
                     ax=axes[plot_num],
-                    label="After Catastrophe",
+                    # label="After Catastrophe",
                 )
-            handles, labels = axes[plot_num].get_legend_handles_labels()
+            # handles, labels = axes[plot_num].get_legend_handles_labels()
             # FIXME
             # try:
             #     i = subplots.index("operations")
@@ -643,11 +670,20 @@ class Simulation(object):
 
         # Plot vault reserves divergence
         if self.with_divergence and self.divergence != []:
-            div_df = DataFrame(self.divergence, columns=["Block", "MeanDivergence", "MinDivergence", "MaxDivergence"])
+            div_df = DataFrame(
+                self.divergence,
+                columns=["Block", "MeanDivergence", "MinDivergence", "MaxDivergence"],
+            )
             div_df.set_index("Block", inplace=True)
-            div_df["MeanDivergence"].plot(ax=axes[plot_num], label="mean divergence", legend=True)
-            div_df["MinDivergence"].plot(ax=axes[plot_num], label="minimum divergence", legend=True)
-            div_df["MaxDivergence"].plot(ax=axes[plot_num], label="max divergence", legend=True)
+            div_df["MeanDivergence"].plot(
+                ax=axes[plot_num], label="mean divergence", legend=True
+            )
+            div_df["MinDivergence"].plot(
+                ax=axes[plot_num], label="minimum divergence", legend=True
+            )
+            div_df["MaxDivergence"].plot(
+                ax=axes[plot_num], label="max divergence", legend=True
+            )
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_title("Vault Divergence \nfrom Requirement")
@@ -760,10 +796,29 @@ class Simulation(object):
         if show:
             plt.show()
 
+    def plot_frpv(self, start_block, end_block, output=None, show=False):
+        plt.style.use(["plot_style.txt"])
+        frpv = []
+        for block in range(start_block, end_block):
+            frpv.append((block, self.wt.fee_reserve_per_vault(block)))
+        df = DataFrame(frpv, columns=["block", "frpv"])
+        df.set_index("block", inplace=True)
+        fig = df.plot()
+        plt.title("Fee Reserve per Vault")
+
+        plt.xlabel("Block", labelpad=15)
+        plt.ylabel("Feerate (sats/vByte)", labelpad=15)
+        fig.size = 3, 7
+
+        if output is not None:
+            plt.savefig(f"{output}.png")
+
+        if show:
+            plt.show()
 
 
 # FIXME: eventually have some small pytests
-if __name__=="__main__":
+if __name__ == "__main__":
 
     # logging.basicConfig(level=logging.DEBUG)
     sim = Simulation(
@@ -776,7 +831,7 @@ if __name__=="__main__":
         i_version=2,
         allocate_version=1,
         exp_active_vaults=5,
-        refill_excess=4*5,
+        refill_excess=4 * 5,
         refill_period=1008,
         delegation_period=144,
         invalid_spend_rate=0.1,
@@ -794,5 +849,9 @@ if __name__=="__main__":
     )
 
     start_block = 200000
-    end_block = 681000
+    end_block = 680000
+
     sim.run(start_block, end_block)
+
+    # sim.plot_frpv(start_block, end_block, show=True)
+    # sim.plot_fee_history(start_block, end_block, show=True)

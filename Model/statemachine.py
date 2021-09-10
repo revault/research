@@ -139,12 +139,6 @@ class CoinPool:
         if self.is_allocated(coin):
             self.deallocate_coin(coin)
         del self.coins[coin.id]
-        if coin.id in self.allocation_map:
-            del self.allocation_map[coin.id]
-
-    def increase_coin(self, coin, value_increase):
-        """Increase the value of this coin by {value_increase}"""
-        self.coins[coin.id].increase_amount(value_increase)
 
 
 class StateMachine:
@@ -238,37 +232,33 @@ class StateMachine:
         if self.frpv[0] == block_height:
             return self.frpv[1]
 
-        else:
-            thirtyD = 144 * 30  # 30 days in blocks
-            ninetyD = 144 * 90  # 90 days in blocks
-            if self.reserve_strat not in self.hist_df:
-                if self.reserve_strat == "95Q30":
-                    self.hist_df["95Q30"] = (
-                        self.hist_df["mean_feerate"]
-                        .rolling(thirtyD, min_periods=144)
-                        .quantile(quantile=0.95, interpolation="linear")
-                    )
-                elif self.reserve_strat == "95Q90":
-                    self.hist_df["95Q90"] = (
-                        self.hist_df["mean_feerate"]
-                        .rolling(ninetyD, min_periods=144)
-                        .quantile(quantile=0.95, interpolation="linear")
-                    )
-                elif self.reserve_strat == "CUMMAX95Q90":
-                    self.hist_df["CUMMAX95Q90"] = (
-                        self.hist_df["mean_feerate"]
-                        .rolling(ninetyD, min_periods=144)
-                        .quantile(quantile=0.95, interpolation="linear")
-                        .cummax()
-                    )
-                else:
-                    raise ValueError("Strategy not implemented")
+        thirtyD = 144 * 30  # 30 days in blocks
+        ninetyD = 144 * 90  # 90 days in blocks
+        if self.reserve_strat not in self.hist_df:
+            if self.reserve_strat == "95Q30":
+                self.hist_df["95Q30"] = (
+                    self.hist_df["mean_feerate"]
+                    .rolling(thirtyD, min_periods=144)
+                    .quantile(quantile=0.95, interpolation="linear")
+                )
+            elif self.reserve_strat == "95Q90":
+                self.hist_df["95Q90"] = (
+                    self.hist_df["mean_feerate"]
+                    .rolling(ninetyD, min_periods=144)
+                    .quantile(quantile=0.95, interpolation="linear")
+                )
+            elif self.reserve_strat == "CUMMAX95Q90":
+                self.hist_df["CUMMAX95Q90"] = (
+                    self.hist_df["mean_feerate"]
+                    .rolling(ninetyD, min_periods=144)
+                    .quantile(quantile=0.95, interpolation="linear")
+                    .cummax()
+                )
+            else:
+                raise ValueError("Strategy not implemented")
 
-            self.frpv = (
-                block_height,
-                self.hist_df[self.reserve_strat][block_height],
-            )
-            return self.frpv[1]
+        self.frpv = (block_height, self.hist_df[self.reserve_strat][block_height])
+        return self.frpv[1]
 
     def _feerate(self, block_height):
         """Return a current feerate estimate (satoshi/vbyte). The value is determined from a
@@ -434,7 +424,7 @@ class StateMachine:
         or are negligible.
         """
         return self.remove_coins(
-            lambda coin: coin.is_processed() is None
+            lambda coin: not coin.is_processed()
             or self.is_negligible(coin, block_height)
         )
 
@@ -461,9 +451,8 @@ class StateMachine:
                 return True
 
             if not self.coin_pool.is_allocated(coin):
-                for x in dist:
-                    if not coin_in_dist(coin.amount, dist, self.I_2_tol):
-                        return True
+                if not coin_in_dist(coin.amount, dist, self.I_2_tol):
+                    return True
 
             if low_feerate and self.is_negligible(coin, block_height):
                 return True
@@ -493,6 +482,8 @@ class StateMachine:
             if not coin.is_processed():
                 return True
 
+            # FIXME: This often will consume the Vm coin of a fee-reserve, which is our
+            # best estimate, leading to large fee over payments.
             if coin.amount < dust_threshold:
                 return True
 
@@ -520,10 +511,6 @@ class StateMachine:
         associated vault's fee_reserve. So this process will diminish the vault's fee
         reserve until the new coins are confirmed and re-allocated.
 
-        The 'processed' value of a fbcoin states the block number in which the CF Tx occurred
-        that created this coin. The 'processed' value is used to determine if coins have been
-        processed yet, and their 'age'.
-
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
         # FIXME: don't copy...
@@ -532,8 +519,7 @@ class StateMachine:
         # Set target values for our coin creation amounts
         target_coin_dist = self.fb_coins_dist(block_height)
 
-        # Select and consume inputs with I(t), returning the total amount and the
-        # number of inputs.
+        # Select and consume inputs with I(t), returning the coins
         if self.I_version == 0:
             coins = self.grab_coins_0(block_height)
         elif self.I_version == 1:
@@ -554,12 +540,14 @@ class StateMachine:
 
         added_coins = []
         # Keep track of the CF tx size and fees as we add outputs
-        cf_size = TX_OVERHEAD_SIZE + P2WPKH_INPUT_SIZE * len(coins)
+        cf_size = cf_tx_size(n_inputs=len(coins), n_outputs=0)
         cf_tx_fee = int(cf_size * feerate)
         # The cost of a distribution for a single vault in the CF tx
         dist_size = P2WPKH_OUTPUT_SIZE * len(target_coin_dist)
         dist_fees = int(dist_size * feerate)
-        dist_cost = sum(target_coin_dist) + dist_fees
+        dist_cost = (
+            sum(target_coin_dist) + dist_fees
+        )  # The amount needed to deduct from total amount of inputs
         # Add new distributions of coins to the CF until we can't afford it anymore
         total_to_consume = sum(c.amount for c in coins)
         num_new_reserves = 0
@@ -583,7 +571,8 @@ class StateMachine:
 
         if num_new_reserves == 0:
             logging.debug(
-                "        CF Tx failed sice num_new_reserves = 0 (not accounting for expected fee)"
+                "        CF Tx failed sice num_new_reserves = 0 (not accounting for"
+                " expected fee)"
             )
             # Not enough in available coins to fanout to 1 complete fee_reserve, so
             # return 0 (as in, 0 fee paid)
@@ -624,11 +613,12 @@ class StateMachine:
             num_outputs = num_new_reserves * len(target_coin_dist)
             increase = remainder // num_outputs
             for coin in added_coins:
-                self.coin_pool.increase_coin(coin, increase)
+                coin.increase_amount(increase)
 
         return cf_tx_fee
 
     # FIXME: cleanup this function..
+    # FIXME: This function gets stuck in infinite loop in L701
     def _allocate_0(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
@@ -640,23 +630,22 @@ class StateMachine:
 
         try:
             # If vault already exists, de-allocate its current fee reserve first
-            vault = next(vault for vault in self.vaults if vault.id == vault_id)
+            vault = next(v for v in self.list_vaults() if v.id == vault_id)
             if self.under_requirement(vault, block_height) == 0:
                 return
             else:
                 logging.debug(
-                    f"  Allocation transition to an existing vault {vault_id} at block {block_height}"
+                    f"  Allocation transition to an existing vault {vault_id} at block"
+                    f" {block_height}"
                 )
                 self.remove_vault(vault)
         except (StopIteration):
             logging.debug(
-                f"  Allocation transition to new vault {vault_id} at block {block_height}"
+                f"  Allocation transition to new vault {vault_id} at block"
+                f" {block_height}"
             )
 
-        total_unallocated = round(
-            sum([c.amount for c in self.coin_pool.unallocated_coins()]),
-            0,
-        )
+        total_unallocated = sum([c.amount for c in self.coin_pool.unallocated_coins()])
         required_reserve = self.fee_reserve_per_vault(block_height)
 
         Vm = self.Vm(block_height)
@@ -665,7 +654,8 @@ class StateMachine:
             self.coin_pool = coin_pool_copy
             self.vaults = vaults_copy
             raise RuntimeError(
-                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since total un-allocated and processed fee-reserve is insufficient"
+                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since"
+                " total un-allocated and processed fee-reserve is insufficient"
             )
 
         # WT begins allocating feebump coins to this new vault and finally updates the vault's fee_reserve
@@ -682,17 +672,19 @@ class StateMachine:
                             if ((1 + tol) * Vm >= coin.amount >= ((1 - tol) * Vm))
                         )
                         self.coin_pool.allocate_coin(fbcoin, vault)
-                        assert fbcoin in self.coin_pool.coins
+                        assert fbcoin in self.list_coins()
                         vault.allocate_coin(fbcoin)
                         search_Vm = False
                         logging.debug(
-                            f"    Vm = {fbcoin.amount} coin found with tolerance {tol*100}%, added to fee reserve"
+                            f"    Vm = {fbcoin.amount} coin found with tolerance"
+                            f" {tol*100}%, added to fee reserve"
                         )
                         break
                     except (StopIteration):
                         if tol == tolerances[-1]:
                             logging.debug(
-                                f"    No coin found for Vm = {Vm} with tolerance {tol*100}%"
+                                f"    No coin found for Vm = {Vm} with tolerance"
+                                f" {tol*100}%"
                             )
                             search_Vm = False
                         continue
@@ -710,7 +702,7 @@ class StateMachine:
                     fbcoin = next(
                         coin
                         for coin in available
-                        if ((1 + tol) * Vm >= coin.amount >= ((1 - tol) * Vm))
+                        if ((1 + tol) * Vm <= coin.amount <= ((1 - tol) * Vm))
                     )
                     self.coin_pool.allocate_coin(fbcoin, vault)
                     vault.allocate_coin(fbcoin)
@@ -721,7 +713,8 @@ class StateMachine:
                 except (StopIteration):
                     if tol == tolerances[::-1][-1]:
                         logging.debug(
-                            f"    No coin found with size other than Vm = {Vm} with tolerance {tol*100}%"
+                            f"    No coin found with size other than Vm = {Vm} with"
+                            f" tolerance {tol*100}%"
                         )
 
             # Allocate additional Vm coins if no other available coins
@@ -740,7 +733,8 @@ class StateMachine:
         new_reserve_total = vault.reserve_balance()
         assert new_reserve_total >= required_reserve
         logging.debug(
-            f"    Reserve for vault {vault.id} has excess of {new_reserve_total-required_reserve}"
+            f"    Reserve for vault {vault.id} has excess of"
+            f" {new_reserve_total-required_reserve}"
         )
 
         # Successful new delegation and allocation!
@@ -758,23 +752,22 @@ class StateMachine:
         try:
             # If vault already exists and is under requirement, de-allocate its current fee
             # reserve first
-            vault = next(vault for vault in self.list_vaults() if vault.id == vault_id)
+            vault = next(v for v in self.list_vaults() if v.id == vault_id)
             if self.under_requirement(vault, block_height) == 0:
                 return
             else:
                 logging.debug(
-                    f"  Allocation transition to an existing vault {vault_id} at block {block_height}"
+                    f"  Allocation transition to an existing vault {vault_id} at block"
+                    f" {block_height}"
                 )
                 self.remove_vault(vault)
         except (StopIteration):
             logging.debug(
-                f"  Allocation transition to new vault {vault_id} at block {block_height}"
+                f"  Allocation transition to new vault {vault_id} at block"
+                f" {block_height}"
             )
 
-        total_unallocated = round(
-            sum([c.amount for c in self.coin_pool.unallocated_coins()]),
-            0,
-        )
+        total_unallocated = sum([c.amount for c in self.coin_pool.unallocated_coins()])
         required_reserve = self.fee_reserve_per_vault(block_height)
 
         Vm = self.Vm(block_height)
@@ -783,7 +776,8 @@ class StateMachine:
             self.coin_pool = coin_pool_copy
             self.vaults = vaults_copy
             raise RuntimeError(
-                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since total un-allocated and processed fee-reserve is insufficient"
+                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since"
+                " total un-allocated and processed fee-reserve is insufficient"
             )
 
         vault = Vault(vault_id, amount)
@@ -803,11 +797,13 @@ class StateMachine:
                         self.coin_pool.allocate_coin(fbcoin, vault)
                         vault.allocate_coin(fbcoin)
                         logging.debug(
-                            f"    {fbcoin} found with tolerance {tol*100}%, added to fee reserve"
+                            f"    {fbcoin} found with tolerance {tol*100}%, added to"
+                            " fee reserve"
                         )
                     except (StopIteration):
                         logging.debug(
-                            f"    No coin found with amount = {x} with tolerance {tol*100}%"
+                            f"    No coin found with amount = {x} with tolerance"
+                            f" {tol*100}%"
                         )
                         not_found.append(x)
                         continue
@@ -818,18 +814,21 @@ class StateMachine:
                     break
 
             # FIXME: this implicitly assumes 1.3*Vm < required_reserve
-            # Now handle the remaining requirement
             diff = required_reserve - vault.reserve_balance()
+            if diff < 0:
+                break
+            # Now handle the remaining requirement, diff
             available = [coin for coin in self.coin_pool.unallocated_coins()]
             # sort in increasing order of amount
             available = sorted(available, key=lambda coin: coin.amount)
             # Try to fill the remaining requirement with smallest available coin that covers the diff
             try:
-                fbcoin = next(coin for coin in available if coin.amount > diff)
+                fbcoin = next(coin for coin in available if coin.amount >= diff)
                 self.coin_pool.allocate_coin(fbcoin, vault)
                 vault.allocate_coin(fbcoin)
                 logging.debug(
-                    f"    {fbcoin} found to cover remaining requirement and added to fee reserve"
+                    f"    {fbcoin} found to cover remaining requirement and added to"
+                    " fee reserve"
                 )
                 continue
             # Otherwise, take the largest available coin and repeat
@@ -845,7 +844,8 @@ class StateMachine:
         new_reserve_total = vault.reserve_balance()
         assert new_reserve_total >= required_reserve
         logging.debug(
-            f"    Reserve for vault {vault.id} has excess of {new_reserve_total-required_reserve}"
+            f"    Reserve for vault {vault.id} has excess of"
+            f" {new_reserve_total-required_reserve}"
         )
 
         # Successful new delegation and allocation!
@@ -904,7 +904,8 @@ class StateMachine:
         while init_fee > 0:
             if vault.allocated_coins() == []:
                 raise RuntimeError(
-                    f"Fee reserve for vault {vault.id} was insufficient to process cancel tx"
+                    f"Fee reserve for vault {vault.id} was insufficient to process"
+                    " cancel tx"
                 )
 
             # sort in increasing order of amount
@@ -971,14 +972,14 @@ if __name__ == "__main__":
         allocate_version=1,
     )
 
-    sm.refill(10000000)
+    sm.refill(500000)
     block = 400000
     sm.consolidate_fanout(block)
+    coins = list(sm.coin_pool.list_coins())
     block += 6
     sm.allocate(vault_id=1, amount=200000, block_height=block)
     sm.process_spend(vault_id=1)
     block += 6
     sm.allocate(vault_id=2, amount=200000, block_height=block)
     sm.process_cancel(vault_id=2, block_height=block)
-    # FIXME: somehow a coin is in vault 2's fee reserve that is not in sm.coin_pool.coins
     sm.finalize_cancel(vault_id=2)
