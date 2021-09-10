@@ -71,9 +71,8 @@ class StateMachine:
 
         # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
         self.frpv = (None, None)  # block, value
-        self.Vm_cache = (None, None) # block, value
-        self.feerate = (None, None) # block, value
-
+        self.Vm_cache = (None, None)  # block, value
+        self.feerate = (None, None)  # block, value
 
     # FIXME: a FeebumpCoin and FeebumpCoinPool class would be neat
     def _fbcoin_id(self):
@@ -210,14 +209,15 @@ class StateMachine:
             return self.Vm_cache[1]
 
         feerate = self._feerate(block_height)
-        Vm = int(self._feerate_to_fee(feerate, "cancel", 0) + feerate * P2WPKH_INPUT_SIZE)
+        Vm = int(
+            self._feerate_to_fee(feerate, "cancel", 0) + feerate * P2WPKH_INPUT_SIZE
+        )
         if Vm <= 0:
             raise ValueError(
                 f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
             )
         self.Vm_cache = (block_height, Vm)
         return Vm
-
 
     def Vb(self, block_height):
         """Amount for a backup feebump coin"""
@@ -264,7 +264,9 @@ class StateMachine:
             return dist
 
     def unallocated_balance(self):
-        return sum([coin["amount"] for coin in self.fbcoins if coin["allocation"]==None])
+        return sum(
+            [coin["amount"] for coin in self.fbcoins if coin["allocation"] == None]
+        )
 
     def balance(self):
         return sum([coin["amount"] for coin in self.fbcoins])
@@ -324,7 +326,7 @@ class StateMachine:
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
-        This version grabs all the coins that either haven't been processed yet 
+        This version grabs all the coins that either haven't been processed yet
         or are negligible.
 
         Return: total amount of consumed inputs, number of inputs
@@ -357,8 +359,8 @@ class StateMachine:
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
-        This version grabs all coins that are unprocessed, all 
-        unallocated coins that are not in the target coin distribution 
+        This version grabs all coins that are unprocessed, all
+        unallocated coins that are not in the target coin distribution
         with a tolerance of X% (where X% == self.I_2_tol*100), and
         if the fee-rate is low, all negligible coins
 
@@ -381,11 +383,11 @@ class StateMachine:
         # remove them from self.fbcoins
         total_diverged = 0
         tol = self.I_2_tol
-        dist = set(self.fb_coins_dist(block_height)) # set removes repeated values
+        dist = set(self.fb_coins_dist(block_height))  # set removes repeated values
         for coin in [fbcoin for fbcoin in self.fbcoins if fbcoin["allocation"] is None]:
             coin_ok = False
             for x in dist:
-                if (1-tol)*x <= coin["amount"] <= (1+tol)*x:
+                if (1 - tol) * x <= coin["amount"] <= (1 + tol) * x:
                     coin_ok = True
                     break
             if coin_ok:
@@ -409,10 +411,12 @@ class StateMachine:
                     if coin["allocation"] is not None:
                         try:
                             vault_diminished[coin["allocation"]] += coin["amount"]
-                        except(KeyError):
+                        except (KeyError):
                             vault_diminished[coin["allocation"]] = coin["amount"]
             if vault_diminished != {}:
-                logging.debug(f"    I2 consumed from the following vaults: \n{vault_diminished}")
+                logging.debug(
+                    f"    I2 consumed from the following vaults: \n{vault_diminished}"
+                )
 
         total_to_consume = total_unprocessed + total_diverged
 
@@ -558,16 +562,25 @@ class StateMachine:
         # If we have more than we need for the CF fee..
         remainder -= cf_tx_fee
         if remainder > 0:
-            # .. First try to opportunistically add a new fb coin
-            # FIXME: maybe add more than one?
-            added_coin_value = self.min_fbcoin_value(block_height)
-            if remainder > added_coin_value + P2WPKH_OUTPUT_SIZE * feerate:
-                self._add_coin(remainder, processed=block_height)
-                return cf_tx_fee + P2WPKH_OUTPUT_SIZE * feerate
+            # .. First try to opportunistically add more fb coins
+            added_coin_value = int(self.min_fbcoin_value(block_height) * 1.3)
+            output_fee = int(P2WPKH_OUTPUT_SIZE * feerate)
+            # The number of coins this large we can add
+            added_coins_count = remainder / (added_coin_value + output_fee)
+            if added_coins_count >= 1:
+                # For a bias toward a lower number of larger outputs, truncate
+                # the number of coins added and add the excess value to the outputs
+                added_coins_count = int(added_coins_count)
+                outputs_fee = added_coin_value + output_fee
+                added_coin_value = int((remainder - outputs_fee) / added_coins_count)
+                for _ in range(added_coins_count):
+                    self._add_coin(added_coin_value, processed=block_height)
+                    cf_tx_fee += outputs_fee
+                return cf_tx_fee
 
             # And fallback to distribute the excess across the created fb coins
             num_outputs = num_new_reserves * len(target_coin_dist)
-            increase = (remainder - cf_tx_fee) // num_outputs
+            increase = (remainder) // num_outputs
             for c in self.fbcoins[len(self.fbcoins) - num_outputs :]:
                 c["amount"] += increase
 
@@ -632,7 +645,9 @@ class StateMachine:
                                 coin
                                 for coin in self.fbcoins
                                 if (coin["allocation"] is None)
-                                and ((1 + tol) * Vm >= coin["amount"] >= ((1 - tol) * Vm))
+                                and (
+                                    (1 + tol) * Vm >= coin["amount"] >= ((1 - tol) * Vm)
+                                )
                             )
                             fbcoin["allocation"] = vault_id
                             fee_reserve.append(fbcoin)
@@ -715,7 +730,7 @@ class StateMachine:
         vaults_copy = list(self.vaults)
 
         try:
-            # If vault already exists and is under requirement, de-allocate its current fee 
+            # If vault already exists and is under requirement, de-allocate its current fee
             # reserve first
             vault = next(vault for vault in self.vaults if vault["id"] == vault_id)
             if self.under_requirement(vault["fee_reserve"], block_height) == 0:
@@ -757,7 +772,7 @@ class StateMachine:
         else:
             fee_reserve = []
             dist = self.fb_coins_dist(block_height)
-            tolerances = [0.05,0.1,0.2,0.3]
+            tolerances = [0.05, 0.1, 0.2, 0.3]
             while sum([coin["amount"] for coin in fee_reserve]) < required_reserve:
                 # Optimistically search for coins in O with small tolerance
                 for tol in tolerances:
@@ -765,16 +780,17 @@ class StateMachine:
                     for x in dist:
                         try:
                             fbcoin = next(
-                                coin for coin in self.fbcoins
+                                coin
+                                for coin in self.fbcoins
                                 if (coin["allocation"] is None)
-                                and ((1 - tol) * x <= coin["amount"] <=(1 + tol) * x)
+                                and ((1 - tol) * x <= coin["amount"] <= (1 + tol) * x)
                             )
                             fbcoin["allocation"] = vault_id
                             fee_reserve.append(fbcoin)
                             logging.debug(
                                 f"    Coin = {fbcoin['amount']} found with tolerance {tol*100}%, added to fee reserve"
                             )
-                        except(StopIteration):
+                        except (StopIteration):
                             logging.debug(
                                 f"    No coin found with amount = {x} with tolerance {tol*100}%"
                             )
@@ -787,7 +803,7 @@ class StateMachine:
                         break
 
                 # Now handle the remaining requirement
-                diff =  required_reserve - sum([coin["amount"] for coin in fee_reserve])
+                diff = required_reserve - sum([coin["amount"] for coin in fee_reserve])
                 available = [
                     coin
                     for coin in self.fbcoins
@@ -832,7 +848,6 @@ class StateMachine:
 
         elif self.allocate_version == 1:
             self._allocate_1(vault_id, amount, block_height)
-
 
     def process_cancel(self, vault_id, block_height):
         """The cancel must be updated with a fee (the large Vm allocated to it).
