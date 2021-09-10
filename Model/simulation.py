@@ -374,7 +374,7 @@ class Simulation(object):
         """
         for tx in self.wt.unconfirmed_transactions():
             if isinstance(tx, ConsolidateFanoutTx):
-                self.wt.finalize_cf(tx, height)
+                self.wt.finalize_consolidate_fanout(tx, height)
                 self.top_up_sequence(height)
             elif isinstance(tx, CancelTx):
                 self.wt.finalize_cancel(tx, height)
