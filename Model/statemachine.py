@@ -19,7 +19,6 @@ from utils import (
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
     TX_OVERHEAD_SIZE,
-    Transaction,
 )
 
 
