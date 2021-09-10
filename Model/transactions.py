@@ -4,8 +4,8 @@ from utils import TX_OVERHEAD_SIZE, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
 class Transaction:
     """A Transaction in the mempool relevant for the WT wallet."""
 
-    def __init__(self, broadcast_block, txins, txouts):
-        self.broadcast_block = broadcast_block
+    def __init__(self, broadcast_height, txins, txouts):
+        self.broadcast_height = broadcast_height
         self.txins = txins
         self.txouts = txouts
 
