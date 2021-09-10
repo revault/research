@@ -1,10 +1,21 @@
+"""
+TODO:
+Update sequences to handle transaction broadcast & finalize. 
+"""
+
 import logging
 import random
 
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
-from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
+from utils import (
+    cf_tx_size,
+    P2WPKH_INPUT_SIZE,
+    P2WPKH_OUTPUT_SIZE,
+    BLOCKS_PER_DAY,
+    Transaction,
+)
 from statemachine import StateMachine
 
 
@@ -119,6 +130,18 @@ class Simulation(object):
         required_reserve_per_vault = self.wt.fee_reserve_per_vault(block_height)
         num_vaults = len(self.wt.list_vaults())
         return num_vaults * required_reserve_per_vault
+
+    def broadcast_refill(self, block_height, expected_new_vaults):
+        """Adds a refill transaction to the WT's mempool and returns it"""
+        # FIXME: what about inputs & fee
+        amount = slef.amount_needed(block_height, expected_new_vaults)
+        coin_id = self.wt.coin_pool.new_coin_id()
+        refill_output = FeebumpCoin(coin_id, amount)
+        refill_tx = Transaction(
+            broadcast_block=block_height, tx_type="Refill", ins=[], outs=[refill_output]
+        )
+        self.wt.mempool.append(refill_tx)
+        return refill_tx
 
     def amount_needed(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
@@ -366,6 +389,25 @@ class Simulation(object):
             amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_catastrophe.append([block_height, amounts])
 
+    def confirm_sequence(self):
+        """State transition which considers each tx in WT's mempool and checks if the offered
+        fee-rate is sufficient.
+        If so, applies the transaction to the state.
+        If not, handles rejection for cancel transaction type or does nothing for others.
+        """
+        for tx in self.wt.mempool:
+            if tx.type == "Refill":
+                self.wt.finalize_refill(tx)
+            if tx.type == "CF":
+                self.wt.finalize_cf(tx)
+            if tx.type == "Cancel":
+                try:
+                    self.wt.finalize_cancel(tx)
+                except:
+                    self.wt.replace_cancel(tx)
+            if tx.type == "Spend":
+                self.wt.finalize_spend(tx)
+
     def run(self, start_block, end_block):
         """Iterate from {start_block} to {end_block}, executing transitions
         according to configuration.
@@ -407,7 +449,9 @@ class Simulation(object):
                     try:
                         self.catastrophe_sequence(block)
                     except NoVaultToSpend:
-                        logging.debug("Failed to Cancel (catastrophe), no vault to spend")
+                        logging.debug(
+                            "Failed to Cancel (catastrophe), no vault to spend"
+                        )
                     # Reboot operation after catastrophe
                     self.initialize_sequence(block)
             except (AllocationError):
