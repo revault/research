@@ -67,6 +67,7 @@ class Vault:
 
     def allocate_coin(self, coin):
         assert coin.id not in self.fb_coins
+        assert coin.is_confirmed()
         self.fb_coins[coin.id] = coin
 
     def deallocate_coin(self, coin):
@@ -92,6 +93,7 @@ class FeebumpCoin:
     def __init__(
         self, _id, amount, processing_state=ProcessingState.UNPROCESSED, fan_block=None
     ):
+        assert fan_block is None or processing_state == ProcessingState.CONFIRMED
         assert isinstance(amount, int) and isinstance(_id, int)
         self.id = _id
         self.amount = amount
@@ -104,13 +106,28 @@ class FeebumpCoin:
         return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block})"
 
     def is_confirmed(self):
-        return self.processing_state == ProcessingState.CONFIRMED
+        """Whether this coin was fanned out and confirmed"""
+        if self.processing_state == ProcessingState.CONFIRMED:
+            assert self.fan_block is not None
+            return True
+        return False
+
+    def is_unconfirmed(self):
+        """Whether this coin was fanned out but not yet confirmed"""
+        if self.processing_state == ProcessingState.PENDING:
+            assert self.fan_block is None
+            return True
+        return False
+
+    def is_unprocessed(self):
+        """Whether this coin is a new refill coin"""
+        return self.processing_state == ProcessingState.UNPROCESSED
 
     def increase_amount(self, value_increase):
         self.amount += value_increase
 
     def confirm(self, height):
-        self.processing_state == ProcessingState.CONFIRMED
+        self.processing_state = ProcessingState.CONFIRMED
         self.fan_block = height
 
 
@@ -155,6 +172,7 @@ class CoinPool:
     def allocate_coin(self, coin, vault):
         assert isinstance(coin, FeebumpCoin) and isinstance(vault, Vault)
         assert coin.id not in self.allocation_map
+        assert coin.is_confirmed()
         self.allocation_map[coin.id] = vault.id
 
     def deallocate_coin(self, coin):
@@ -364,7 +382,6 @@ class StateMachine:
         # FIXME: this is wrong!! min feerate is always 0 or 1 because sponsored txs!
         min_feerate = self.hist_df["min_feerate"][height]
         min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
-        print(tx.feerate, min_feerate)
         return tx.feerate() > min_feerate
 
     def Vm(self, block_height):
@@ -479,8 +496,8 @@ class StateMachine:
         or are negligible.
         """
         return self.remove_coins(
-            lambda coin: coin.is_confirmed()
-            or self.is_negligible(coin, block_height)
+            lambda coin: not coin.is_unconfirmed()
+            and (coin.is_unprocessed() or self.is_negligible(coin, block_height))
         )
 
     def grab_coins_2(self, block_height):
@@ -502,7 +519,9 @@ class StateMachine:
             return False
 
         def coin_filter(coin):
-            if coin.is_confirmed():
+            if coin.is_unconfirmed():
+                return False
+            if coin.is_unprocessed():
                 return True
 
             if not self.coin_pool.is_allocated(coin):
@@ -534,7 +553,9 @@ class StateMachine:
         min_fbcoin_value = self.min_fbcoin_value(height)
 
         def coin_filter(coin):
-            if not coin.is_confirmed():
+            if coin.is_unconfirmed():
+                return False
+            if coin.is_unprocessed():
                 return True
 
             # FIXME: This often will consume the Vm coin of a fee-reserve, which is our
@@ -632,7 +653,6 @@ class StateMachine:
                     self.coin_pool.add_coin(
                         x,
                         processing_state=ProcessingState.PENDING,
-                        fan_block=block_height,
                     )
                 )
 
@@ -670,7 +690,7 @@ class StateMachine:
                 for _ in range(added_coins_count):
                     added_coins.append(
                         self.coin_pool.add_coin(
-                            added_coin_value, processing_state=ProcessingState.PENDING, fan_block=block_height
+                            added_coin_value, processing_state=ProcessingState.PENDING
                         )
                     )
                 cf_tx_fee += outputs_fee
