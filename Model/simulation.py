@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
 from statemachine import StateMachine
-from transactions import ConsolidateFanoutTx, CancelTx, SpendTx
+from transactions import ConsolidateFanoutTx, CancelTx
 from utils import (
     cf_tx_size,
     P2WPKH_INPUT_SIZE,
@@ -302,7 +302,7 @@ class Simulation(object):
         vaultID = self._spend_init(block_height)
         # Spend transition
         logging.debug(f"  Spend transition at block {block_height}")
-        self.wt.broadcast_spend(vaultID)
+        self.wt.spend(vaultID, block_height)
 
         # snapshot coin pool after spend attempt
         if self.with_coin_pool:
@@ -378,8 +378,6 @@ class Simulation(object):
                 self.top_up_sequence(height)
             elif isinstance(tx, CancelTx):
                 self.wt.finalize_cancel(tx, height)
-            elif isinstance(tx, SpendTx):
-                self.wt.finalize_spend(tx, height)
             else:
                 raise
 

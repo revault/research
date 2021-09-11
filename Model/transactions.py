@@ -32,7 +32,3 @@ class ConsolidateFanoutTx(Transaction):
 
 class CancelTx(Transaction):
     pass
-
-
-class SpendTx(Transaction):
-    pass
