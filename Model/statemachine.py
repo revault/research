@@ -447,7 +447,7 @@ class StateMachine:
             return False
 
         def coin_filter(coin):
-            if coin.is_processed():
+            if not coin.is_processed():
                 return True
 
             if not self.coin_pool.is_allocated(coin):
