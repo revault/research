@@ -123,6 +123,10 @@ CANCEL_TX_WEIGHT = {
 }
 
 
+# The feerate at which the Cancel transaction is presigned in sat/vb
+CANCEL_TX_PRESIGNED_FEERATE = 88
+
+
 def cf_tx_size(n_inputs, n_outputs):
     """Size of the consolidate-fanout transaction, in vbytes"""
     return (
