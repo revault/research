@@ -617,130 +617,7 @@ class StateMachine:
 
         return cf_tx_fee
 
-    # FIXME: cleanup this function..
-    # FIXME: This function gets stuck in infinite loop in L701
     def _allocate_0(self, vault_id, amount, block_height):
-        """WT allocates coins to a (new/existing) vault if there is enough
-        available coins to meet the requirement.
-        """
-        # FIXME: don't deepcopy
-        # Recovery state
-        coin_pool_copy = deepcopy(self.coin_pool)
-        vaults_copy = deepcopy(self.vaults)
-
-        try:
-            # If vault already exists, de-allocate its current fee reserve first
-            vault = next(v for v in self.list_vaults() if v.id == vault_id)
-            if self.under_requirement(vault, block_height) == 0:
-                return
-            else:
-                logging.debug(
-                    f"  Allocation transition to an existing vault {vault_id} at block"
-                    f" {block_height}"
-                )
-                self.remove_vault(vault)
-        except (StopIteration):
-            logging.debug(
-                f"  Allocation transition to new vault {vault_id} at block"
-                f" {block_height}"
-            )
-
-        total_unallocated = sum([c.amount for c in self.coin_pool.unallocated_coins()])
-        required_reserve = self.fee_reserve_per_vault(block_height)
-
-        Vm = self.Vm(block_height)
-        logging.debug(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
-        if required_reserve > total_unallocated:
-            self.coin_pool = coin_pool_copy
-            self.vaults = vaults_copy
-            raise RuntimeError(
-                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since"
-                " total un-allocated and processed fee-reserve is insufficient"
-            )
-
-        # WT begins allocating feebump coins to this new vault and finally updates the vault's fee_reserve
-        vault = Vault(vault_id, amount)
-        tolerances = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
-        search_Vm = True
-        while vault.reserve_balance() < required_reserve:
-            if search_Vm:
-                for tol in tolerances:
-                    try:
-                        fbcoin = next(
-                            coin
-                            for coin in self.coin_pool.unallocated_coins()
-                            if ((1 + tol) * Vm >= coin.amount >= ((1 - tol) * Vm))
-                        )
-                        self.coin_pool.allocate_coin(fbcoin, vault)
-                        assert fbcoin in self.list_coins()
-                        vault.allocate_coin(fbcoin)
-                        search_Vm = False
-                        logging.debug(
-                            f"    Vm = {fbcoin.amount} coin found with tolerance"
-                            f" {tol*100}%, added to fee reserve"
-                        )
-                        break
-                    except (StopIteration):
-                        if tol == tolerances[-1]:
-                            logging.debug(
-                                f"    No coin found for Vm = {Vm} with tolerance"
-                                f" {tol*100}%"
-                            )
-                            search_Vm = False
-                        continue
-
-            available = [coin for coin in self.coin_pool.unallocated_coins()]
-            if available == []:
-                self.coin_pool = coin_pool_copy
-                self.vaults = vaults_copy
-                raise (RuntimeError("No available coins for delegation"))
-
-            # Scan through remaining coins (ignoring Vm-sized first)
-            for tol in tolerances[::-1]:
-                try:
-                    # FIXME: Is there advantage to choosing randomly?
-                    fbcoin = next(
-                        coin
-                        for coin in available
-                        if ((1 + tol) * Vm <= coin.amount <= ((1 - tol) * Vm))
-                    )
-                    self.coin_pool.allocate_coin(fbcoin, vault)
-                    vault.allocate_coin(fbcoin)
-                    logging.debug(
-                        f"    Coin of size {fbcoin.amount} added to the fee reserve"
-                    )
-                    break
-                except (StopIteration):
-                    if tol == tolerances[::-1][-1]:
-                        logging.debug(
-                            f"    No coin found with size other than Vm = {Vm} with"
-                            f" tolerance {tol*100}%"
-                        )
-
-            # Allocate additional Vm coins if no other available coins
-            all_Vm = all(
-                (1 + tolerances[0]) * Vm >= coin.amount >= (1 - tolerances[0]) * Vm
-                for coin in available
-            )
-            if all_Vm:
-                logging.debug(
-                    f"    All coins found were Vm-sized at block {block_height}"
-                )
-                fbcoin = next(coin for coin in available)
-                self.coin_pool.allocate_coin(fbcoin, vault)
-                vault.allocate_coin(fbcoin)
-
-        new_reserve_total = vault.reserve_balance()
-        assert new_reserve_total >= required_reserve
-        logging.debug(
-            f"    Reserve for vault {vault.id} has excess of"
-            f" {new_reserve_total-required_reserve}"
-        )
-
-        # Successful new delegation and allocation!
-        self.vaults[vault.id] = vault
-
-    def _allocate_1(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
@@ -852,12 +729,8 @@ class StateMachine:
         self.vaults[vault.id] = vault
 
     def allocate(self, vault_id, amount, block_height):
-
         if self.allocate_version == 0:
             self._allocate_0(vault_id, amount, block_height)
-
-        elif self.allocate_version == 1:
-            self._allocate_1(vault_id, amount, block_height)
 
     def process_cancel(self, vault_id, block_height):
         """The cancel must be updated with a fee (the large Vm allocated to it).
