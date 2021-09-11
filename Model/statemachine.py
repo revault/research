@@ -238,7 +238,7 @@ class StateMachine:
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
-        self.I_2_tol = 0.2
+        self.I_2_tol = 0.3
 
         # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
         self.frpv = (None, None)  # block, value
@@ -247,6 +247,9 @@ class StateMachine:
 
     def list_vaults(self):
         return list(self.vaults.values())
+
+    def list_available_vaults(self):
+        return [v for v in self.list_vaults() if v.is_available()]
 
     def list_coins(self):
         return list(self.coin_pool.list_coins())
@@ -659,10 +662,7 @@ class StateMachine:
             num_new_reserves += 1
             for x in target_coin_dist:
                 added_coins.append(
-                    self.coin_pool.add_coin(
-                        x,
-                        processing_state=ProcessingState.PENDING,
-                    )
+                    self.coin_pool.add_coin(x, processing_state=ProcessingState.PENDING)
                 )
 
         if num_new_reserves == 0:
@@ -909,6 +909,7 @@ class StateMachine:
                 cancel_fb_inputs.append(fbcoin)
 
         vault.set_status(VaultState.CANCELING)
+        assert not vault.is_available()
         self.mempool.append(CancelTx(block_height, vault.id, self.cancel_vbytes()))
 
         return cancel_fb_inputs
