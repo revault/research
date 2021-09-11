@@ -85,7 +85,8 @@ fn main() {
                 block.height,
                 mean(&fees),
                 median(&fees),
-                fees[0],
+                // For the min fee we assume no more than 5% are paid out of band
+                fees[(fees.len() - 1) / 20],
                 fees[fees.len() - 1],
                 mean(&feerates),
                 median(&feerates),
