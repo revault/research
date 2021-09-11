@@ -162,17 +162,18 @@ class Simulation(object):
         return int(R)
 
     def _reserve_divergence(self, block_height):
-        if self.wt.list_vaults() != []:
+        vaults = self.wt.list_available_vaults()
+        if vaults != []:
             divergence = []
             frpv = self.wt.fee_reserve_per_vault(block_height)
-            for vault in self.wt.list_vaults():
+            for vault in vaults:
                 div = vault.reserve_balance() - frpv
                 divergence.append(div)
             # block, mean div, min div, max div
             self.divergence.append(
                 [
                     block_height,
-                    sum(divergence) / len(self.wt.list_vaults()),
+                    sum(divergence) / len(vaults),
                     min(divergence),
                     max(divergence),
                 ]
@@ -240,7 +241,7 @@ class Simulation(object):
 
     def top_up_sequence(self, block_height):
         # loop over copy since allocate may remove an element, changing list index
-        for vault in list(self.wt.list_vaults()):
+        for vault in list(self.wt.list_available_vaults()):
             try:
                 # Allocation transition
                 logging.debug(
@@ -255,10 +256,10 @@ class Simulation(object):
 
     def spend_sequence(self, block_height):
         logging.debug(f"Spend sequence at block {block_height}")
-        if len(self.wt.list_vaults()) == 0:
+        if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
-        vault_id = random.choice(self.wt.list_vaults()).id
+        vault_id = random.choice(self.wt.list_available_vaults()).id
         # Spend transition
         logging.debug(f"  Spend transition at block {block_height}")
         self.wt.spend(vault_id, block_height)
@@ -270,10 +271,10 @@ class Simulation(object):
 
     def cancel_sequence(self, block_height):
         logging.debug(f"Cancel sequence at block {block_height}")
-        if len(self.wt.list_vaults()) == 0:
+        if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
-        vault_id = random.choice(self.wt.list_vaults()).id
+        vault_id = random.choice(self.wt.list_available_vaults()).id
         # Cancel transition
         cancel_inputs = self.wt.broadcast_cancel(vault_id, block_height)
         self.cancel_fee = sum(coin.amount for coin in cancel_inputs)
@@ -295,14 +296,14 @@ class Simulation(object):
             self.overpayments.append([block_height, self.cancel_fee - feerate])
 
     def catastrophe_sequence(self, block_height):
-        if len(self.wt.list_vaults()) == 0:
+        if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
         # Topup sequence
         self.top_up_sequence(block_height)
 
         logging.debug(f"Catastrophe sequence at block {block_height}")
-        for vault in self.wt.list_vaults():
+        for vault in self.wt.list_available_vaults():
             # Cancel transition
             cancel_inputs = self.wt.broadcast_cancel(vault.id, block_height)
             # If a cancel fee has already been paid this block, sum those fees
@@ -444,7 +445,7 @@ class Simulation(object):
             if self.with_cum_op_cost:
                 # Check if wt becomes risky
                 if switch == "good":
-                    for vault in self.wt.list_vaults():
+                    for vault in self.wt.list_available_vaults():
                         if self.wt.under_requirement(vault, block) != 0:
                             switch = "bad"
                             break
@@ -454,7 +455,7 @@ class Simulation(object):
                 # Check if wt no longer risky
                 if switch == "bad":
                     any_risk = []
-                    for vault in self.wt.list_vaults():
+                    for vault in self.wt.list_available_vaults():
                         if self.wt.under_requirement(vault, block) != 0:
                             any_risk.append(True)
                             break
@@ -524,18 +525,23 @@ class Simulation(object):
             costs_df.plot.scatter(
                 x="block",
                 y="Refill Fee",
-                s=6,
+                s=10,
                 color="r",
                 ax=axes[plot_num],
                 label="Refill Fee",
             )
             costs_df.plot.scatter(
-                x="block", y="CF Fee", s=6, color="g", ax=axes[plot_num], label="CF Fee"
+                x="block",
+                y="CF Fee",
+                s=10,
+                color="g",
+                ax=axes[plot_num],
+                label="CF Fee",
             )
             costs_df.plot.scatter(
                 x="block",
                 y="Cancel Fee",
-                s=6,
+                s=10,
                 color="b",
                 ax=axes[plot_num],
                 label="Cancel Fee",
