@@ -11,12 +11,7 @@ import numpy as np
 from pandas import DataFrame
 from statemachine import StateMachine
 from transactions import ConsolidateFanoutTx, CancelTx
-from utils import (
-    cf_tx_size,
-    P2WPKH_INPUT_SIZE,
-    P2WPKH_OUTPUT_SIZE,
-    BLOCKS_PER_DAY,
-)
+from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
 
 
 class AllocationError(Exception):
@@ -183,45 +178,9 @@ class Simulation(object):
                 ]
             )
 
-    def initialize_sequence(self, block_height):
-        logging.debug(f"Initialize sequence at block {block_height}")
-        # Refill transition
-        refill_amount = self.amount_needed(block_height, self.expected_active_vaults)
-        if refill_amount <= 0:
-            logging.debug(f"  Refill not required, WT has enough bitcoin")
-        else:
-            self.wt.refill(refill_amount)
-            logging.debug(
-                f"  Refill transition at block {block_height} by {refill_amount}"
-            )
+    def refill_sequence(self, block_height, expected_new_vaults):
+        refill_amount = self.amount_needed(block_height, expected_new_vaults)
 
-            # Track operational costs
-            # TODO: 2in 2out
-            try:
-                self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
-            # FIXME: why key error?
-            except (ValueError, KeyError):
-                self.refill_fee = 109.5 * self.wt._feerate(block_height)
-
-            # snapshot coin pool after refill Tx
-            if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_refill.append([block_height, amounts])
-
-            # Consolidate-fanout transition
-            self.cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
-            logging.debug(
-                f"  Consolidate-fanout transition at block {block_height} with fee:"
-                f" {self.cf_fee}"
-            )
-
-            # snapshot coin pool after CF Tx
-            if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_cf.append([block_height, amounts])
-
-    def refill_sequence(self, block_height):
-        refill_amount = self.amount_needed(block_height, 0)
         if refill_amount > 0:
             logging.debug(f"Refill sequence at block {block_height}")
             # Refill transition
@@ -237,7 +196,7 @@ class Simulation(object):
             except (ValueError, KeyError):
                 self.refill_fee = 109.5 * self.wt._feerate(block_height)
 
-            # snapshot coin pool after refill Tx
+            # snapshot coin pool after refill confirmation
             if self.with_coin_pool:
                 amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_refill.append([block_height, amounts])
@@ -254,6 +213,9 @@ class Simulation(object):
             if self.with_coin_pool:
                 amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_cf.append([block_height, amounts])
+
+        else:
+            logging.debug(f"  Refill not required, WT has enough bitcoin")
 
     def _spend_init(self, block_height):
         # Top up sequence
@@ -388,7 +350,11 @@ class Simulation(object):
         switch = "good"
 
         # At startup allocate as many reserves as we expect to have vaults
-        self.initialize_sequence(start_block)
+        logging.debug(
+            f"Initializing at block {start_block} with {self.expected_active_vaults}"
+            " new vaults"
+        )
+        self.refill_sequence(start_block, self.expected_active_vaults)
 
         # For each block in the range, simulate an action affecting the watchtower
         # (formally described as a sequence of transitions) based on the configured
@@ -412,7 +378,7 @@ class Simulation(object):
             try:
                 # Refill once per refill period
                 if block % self.refill_period == 0:
-                    self.refill_sequence(block)
+                    self.refill_sequence(block, 0)
 
                 # The spend rate is a rate per day
                 if random.random() < self.spend_rate / BLOCKS_PER_DAY:
@@ -438,7 +404,7 @@ class Simulation(object):
                             "Failed to Cancel (catastrophe), no vault to spend"
                         )
                     # Reboot operation after catastrophe
-                    self.initialize_sequence(block)
+                    self.refill_sequence(block, self.expected_active_vaults)
             except (AllocationError):
                 self.end_block = block
                 logging.error(f"Allocation error at block {block}")
@@ -865,6 +831,7 @@ class Simulation(object):
 
         if show:
             plt.show()
+
 
 # FIXME: eventually have some small pytests
 if __name__ == "__main__":
