@@ -217,10 +217,10 @@ class Simulation(object):
         else:
             logging.debug(f"  Refill not required, WT has enough bitcoin")
 
-    def _spend_init(self, block_height):
+    def delegate_sequence(self, block_height):
         # Top up sequence
-        # Top up delegations before processing a delegation, because time has passed, and we mustn't accept
-        # delegation if the available coin pool is insufficient.
+        # Top up allocations before processing a delegation, because time has passed, and
+        # we mustn't accept a delegation if the available coin pool is insufficient.
         self.top_up_sequence(block_height)
 
         # Allocation transition
@@ -237,9 +237,6 @@ class Simulation(object):
         except (RuntimeError):
             logging.debug(f"  Allocation transition FAILED for vault {vault_id}")
             raise (AllocationError())
-
-        # choose a random vault to spend
-        return random.choice(self.wt.list_vaults()).id
 
     def top_up_sequence(self, block_height):
         # loop over copy since allocate may remove an element, changing list index
@@ -261,10 +258,10 @@ class Simulation(object):
         if len(self.wt.list_vaults()) == 0:
             raise NoVaultToSpend
 
-        vaultID = self._spend_init(block_height)
+        vault_id = random.choice(self.wt.list_vaults()).id
         # Spend transition
         logging.debug(f"  Spend transition at block {block_height}")
-        self.wt.spend(vaultID, block_height)
+        self.wt.spend(vault_id, block_height)
 
         # snapshot coin pool after spend attempt
         if self.with_coin_pool:
@@ -276,7 +273,7 @@ class Simulation(object):
         if len(self.wt.list_vaults()) == 0:
             raise NoVaultToSpend
 
-        vault_id = self._spend_init(block_height)
+        vault_id = random.choice(self.wt.list_vaults()).id
         # Cancel transition
         cancel_inputs = self.wt.broadcast_cancel(vault_id, block_height)
         self.cancel_fee = sum(coin.amount for coin in cancel_inputs)
@@ -382,6 +379,7 @@ class Simulation(object):
 
                 # The spend rate is a rate per day
                 if random.random() < self.spend_rate / BLOCKS_PER_DAY:
+                    self.delegate_sequence(block)
                     # generate invalid spend, requires cancel
                     if random.random() < self.invalid_spend_rate:
                         try:
