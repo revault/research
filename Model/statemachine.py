@@ -11,6 +11,7 @@ TODO:
 import logging
 import numpy as np
 from copy import deepcopy
+import copy
 from enum import Enum
 from pandas import read_csv
 from transactions import CancelTx, ConsolidateFanoutTx
@@ -169,6 +170,10 @@ class CoinPool:
             if c.is_confirmed() and c.id not in self.allocation_map
         ]
 
+    def unprocessed_coins(self):
+        """Return coins that have not yet been fanned out."""
+        return [c for c in self.coins.values() if c.is_unprocessed()]
+
     def allocate_coin(self, coin, vault):
         assert isinstance(coin, FeebumpCoin) and isinstance(vault, Vault)
         assert coin.id not in self.allocation_map
@@ -184,8 +189,10 @@ class CoinPool:
         processing_state=ProcessingState.UNPROCESSED,
         fan_block=None,
         allocated_vault_id=None,
+        coin_id=None,
     ):
-        coin_id = self.new_coin_id()
+        if coin_id is None:
+            coin_id = self.new_coin_id()
         self.coins[coin_id] = FeebumpCoin(coin_id, amount, processing_state, fan_block)
         if allocated_vault_id is not None:
             assert isinstance(allocated_vault_id, int)
@@ -607,21 +614,23 @@ class StateMachine:
 
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
-        # FIXME: don't copy...
-        coin_pool_copy = deepcopy(self.coin_pool)
-        vaults_copy = deepcopy(self.vaults)
+        # Recovery data:
+        unprocessed_coin_ids = [c.id for c in self.coin_pool.unprocessed_coins()]
+        allocation_map_copy = self.coin_pool.allocation_map.copy()
+        coin_id_copy = self.coin_pool.coin_id
+
         # Set target values for our coin creation amounts
         target_coin_dist = self.fb_coins_dist(block_height)
 
         # Select and consume inputs with I(t), returning the coins
         if self.I_version == 0:
-            coins = self.grab_coins_0(block_height)
+            cf_inputs = self.grab_coins_0(block_height)
         elif self.I_version == 1:
-            coins = self.grab_coins_1(block_height)
+            cf_inputs = self.grab_coins_1(block_height)
         elif self.I_version == 2:
-            coins = self.grab_coins_2(block_height)
+            cf_inputs = self.grab_coins_2(block_height)
         elif self.I_version == 3:
-            coins = self.grab_coins_3(block_height)
+            cf_inputs = self.grab_coins_3(block_height)
         else:
             raise CfError("Unknown algorithm version for coin consolidation")
 
@@ -632,9 +641,9 @@ class StateMachine:
 
         # FIXME this doesn't re-create enough coins? If we consolidated some.
 
-        added_coins = []
+        cf_outputs = []
         # Keep track of the CF tx size and fees as we add outputs
-        cf_size = cf_tx_size(n_inputs=len(coins), n_outputs=0)
+        cf_size = cf_tx_size(n_inputs=len(cf_inputs), n_outputs=0)
         cf_tx_fee = int(cf_size * feerate)
         # The cost of a distribution for a single vault in the CF tx
         dist_size = P2WPKH_OUTPUT_SIZE * len(target_coin_dist)
@@ -643,7 +652,7 @@ class StateMachine:
             sum(target_coin_dist) + dist_fees
         )  # The amount needed to deduct from total amount of inputs
         # Add new distributions of coins to the CF until we can't afford it anymore
-        total_to_consume = sum(c.amount for c in coins)
+        total_to_consume = sum(c.amount for c in cf_inputs)
         num_new_reserves = 0
         consumed = 0
         while True:
@@ -661,7 +670,7 @@ class StateMachine:
 
             num_new_reserves += 1
             for x in target_coin_dist:
-                added_coins.append(
+                cf_outputs.append(
                     self.coin_pool.add_coin(x, processing_state=ProcessingState.PENDING)
                 )
 
@@ -670,10 +679,28 @@ class StateMachine:
                 "        CF Tx failed sice num_new_reserves = 0 (not accounting for"
                 " expected fee)"
             )
-            # Not enough in available coins to fanout to 1 complete fee_reserve, so
-            # return 0 (as in, 0 fee paid)
-            self.coin_pool = coin_pool_copy
-            self.vaults = vaults_copy
+            # Recovery strategy
+            # revert allocation_map & coin_id
+            self.coin_pool.allocation_map = allocation_map_copy
+            self.coin_pool.coin_id = coin_id_copy
+            # add cf_inputs back to self.coin_pool and allocate to vault if necessary
+            for c in cf_inputs:
+                if self.coin_pool.is_allocated(c):
+                    vid = self.coin_pool.coin_allocation(c)
+                    self.vaults[vid].allocate_coin(c)
+                else:
+                    vid = None
+                if c.id in unprocessed_coin_ids:
+                    state = ProcessingState.UNPROCESSED
+                else:
+                    state = ProcessingState.CONFIRMED
+                self.coin_pool.add_coin(
+                    amount=c.amount,
+                    fan_block=c.fan_block,
+                    processing_state=state,
+                    allocated_vault_id=vid,
+                    coin_id=c.id,
+                )
             return 0
 
         remainder = total_to_consume - (num_new_reserves * sum(target_coin_dist))
@@ -710,7 +737,7 @@ class StateMachine:
                 for coin in added_coins:
                     coin.increase_amount(increase)
 
-        self.mempool.append(ConsolidateFanoutTx(block_height, coins, added_coins))
+        self.mempool.append(ConsolidateFanoutTx(block_height, cf_inputs, cf_outputs))
         return cf_tx_fee
 
     def finalize_consolidate_fanout(self, tx, height):
