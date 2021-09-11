@@ -317,7 +317,6 @@ class Simulation(object):
         vault_id = self._spend_init(block_height)
         # Cancel transition
         cancel_inputs = self.wt.broadcast_cancel(vault_id, block_height)
-        self.wt.finalize_cancel(vault_id)
         self.cancel_fee = sum(coin.amount for coin in cancel_inputs)
         logging.debug(
             f"  Cancel transition with vault {vault_id} for fee: {self.cancel_fee}"
@@ -347,7 +346,6 @@ class Simulation(object):
         for vault in self.wt.list_vaults():
             # Cancel transition
             cancel_inputs = self.wt.broadcast_cancel(vault.id, block_height)
-            self.wt.finalize_cancel(vault.id)
             # If a cancel fee has already been paid this block, sum those fees
             # so that when plotting costs this will appear as one total operation
             # rather than several separate cancel operations
@@ -389,6 +387,7 @@ class Simulation(object):
         self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
         switch = "good"
 
+        # At startup allocate as many reserves as we expect to have vaults
         self.initialize_sequence(start_block)
 
         # For each block in the range, simulate an action affecting the watchtower
@@ -399,6 +398,16 @@ class Simulation(object):
         for block in range(start_block, end_block):
             # First of all, was any transaction confirmed in this block?
             self.confirm_sequence(block)
+
+            # We always try to keep the number of expected vaults under watch. We might
+            # not be able to allocate if a CF tx is pending but not yet confirmed.
+            for i in range(len(self.wt.list_vaults()), self.expected_active_vaults):
+                amount = int(10e10)  # 100 BTC
+                try:
+                    self.wt.allocate(self.new_vault_id(), amount, block)
+                except RuntimeError:
+                    logging.info("Not enough funds to allocate all the expected vaults")
+                self.vault_count += 1
 
             try:
                 # Refill once per refill period

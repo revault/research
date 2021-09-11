@@ -713,6 +713,8 @@ class StateMachine:
             for coin in tx.txouts:
                 self.coin_pool.confirm_coin(coin, height)
             self.mempool.remove(tx)
+            return True
+        return False
 
     # FIXME: cleanup this function..
     def _allocate_0(self, vault_id, amount, block_height):
