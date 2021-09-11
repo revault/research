@@ -239,21 +239,21 @@ class Simulation(object):
 
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
-            self.cf_fee = self.wt.consolidate_fanout(block_height + 1)
+            self.cf_fee = self.wt.consolidate_fanout(block_height)
             logging.debug(
-                f"  Consolidate-fanout transition at block {block_height+1} with fee:"
+                f"  Consolidate-fanout transition at block {block_height} with fee:"
                 f" {self.cf_fee}"
             )
 
             # snapshot coin pool after CF Tx confirmation
             if self.with_coin_pool:
                 amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_cf.append([block_height + 7, amounts])
+                self.pool_after_cf.append([block_height, amounts])
 
             # Top up sequence
             # Top up delegations after confirmation of CF Tx, because consolidating coins
             # can diminish the fee_reserve of a vault
-            self.top_up_sequence(block_height + 7)
+            self.top_up_sequence(block_height)
 
     def _spend_init(self, block_height):
         # Top up sequence
