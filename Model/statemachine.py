@@ -448,7 +448,13 @@ class StateMachine:
             return dist
 
     def unallocated_balance(self):
-        return sum([coin.amount for coin in self.coin_pool.unallocated_coins()])
+        return sum(
+            [
+                coin.amount
+                for coin in self.coin_pool.list_coins()
+                if not self.coin_pool.is_allocated(coin)
+            ]
+        )
 
     def balance(self):
         return self.coin_pool.balance()
