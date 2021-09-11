@@ -412,9 +412,7 @@ class StateMachine:
 
         This version grabs all the existing feebump coins.
         """
-        coins = list(self.coin_pool.list_coins())
-        self.coin_pool = CoinPool()
-        return coins
+        return self.remove_coins(lambda _: True)
 
     def grab_coins_1(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
