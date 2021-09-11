@@ -604,7 +604,7 @@ class StateMachine:
                             added_coin_value, fan_block=block_height
                         )
                     )
-                    cf_tx_fee += outputs_fee
+                cf_tx_fee += outputs_fee
                 return cf_tx_fee
 
             # And fallback to distribute the excess across the created fb coins
