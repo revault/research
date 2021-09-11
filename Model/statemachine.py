@@ -355,6 +355,10 @@ class StateMachine:
         self.feerate = (block_height, self.hist_df[self.estimate_strat][block_height])
         return self.feerate[1]
 
+    def cancel_vbytes(self):
+        """Size of the Cancel transaction without any feebump input"""
+        return (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
+
     # FIXME: remove tx_type!!
     def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
         """Convert feerate (satoshi/vByte) into transaction fee (satoshi).
@@ -367,8 +371,7 @@ class StateMachine:
         if tx_type not in ["cancel", "emergency", "unemergency"]:
             raise ValueError("Invalid tx_type")
         # feerate is in satoshis/vbyte
-        cancel_tx_size_no_fb = (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
-        cancel_tx_size = cancel_tx_size_no_fb + n_fb_inputs * P2WPKH_INPUT_SIZE
+        cancel_tx_size = self.cancel_vbytes() + n_fb_inputs * P2WPKH_INPUT_SIZE
         return int(cancel_tx_size * feerate)
 
     def fee_reserve_per_vault(self, block_height):
@@ -898,8 +901,7 @@ class StateMachine:
                 cancel_fb_inputs.append(fbcoin)
 
         vault.set_status(VaultState.CANCELING)
-        # FIXME: proper fee computation for the Cancel!!
-        self.mempool.append(CancelTx(block_height, cancel_fb_inputs, []))
+        self.mempool.append(CancelTx(block_height, vault.id, self.cancel_vbytes()))
 
         return cancel_fb_inputs
 
@@ -908,10 +910,7 @@ class StateMachine:
         become unallocated. The vault with vault_id is removed from vaults.
         """
         if self.is_tx_confirmed(tx, height):
-            # The vault it was allocated to is the one the fb coins, as txins of this tx
-            # were allocated to. Use this instead of adding yet another mapping.
-            vault_id = tx.ins.values()[0].id
-            self.remove_vault(self.vaults[vault_id])
+            self.remove_vault(self.vaults[tx.vault_id])
             self.mempool.remove(tx)
 
     def spend(self, vault_id, height):
