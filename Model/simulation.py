@@ -1,8 +1,3 @@
-"""
-TODO:
-Update sequences to handle transaction broadcast & finalize. 
-"""
-
 import logging
 import random
 
@@ -41,6 +36,7 @@ class Simulation(object):
         spend_rate,
         invalid_spend_rate,
         catastrophe_rate,
+        delegation_rate=None,
         with_balance=False,
         with_divergence=False,
         with_op_cost=False,
@@ -58,6 +54,7 @@ class Simulation(object):
         self.refill_excess = refill_excess
         self.refill_period = refill_period
         self.spend_rate = spend_rate
+        self.delegation_rate = delegation_rate
 
         # Manager parameters
         self.invalid_spend_rate = invalid_spend_rate
@@ -219,6 +216,7 @@ class Simulation(object):
             logging.debug(f"  Refill not required, WT has enough bitcoin")
 
     def delegate_sequence(self, block_height):
+        logging.debug(f"Delegate sequence at block {block_height}")
         # Top up sequence
         # Top up allocations before processing a delegation, because time has passed, and
         # we mustn't accept a delegation if the available coin pool is insufficient.
@@ -339,7 +337,135 @@ class Simulation(object):
             else:
                 raise
 
-    def run(self, start_block, end_block):
+    def run_real(self, start_block, end_block):
+        """Iterate from {start_block} to {end_block}, executing transitions
+        according to configuration.
+
+        This version doesn't proceed all spends/cancels by delegate_sequence.
+        """
+        self.start_block, self.end_block = start_block, end_block
+        self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
+        switch = "good"
+
+        # At startup allocate as many reserves as we expect to have vaults
+        logging.debug(
+            f"Initializing at block {start_block} with {self.expected_active_vaults}"
+            " new vaults"
+        )
+        self.refill_sequence(start_block, self.expected_active_vaults)
+
+        # For each block in the range, simulate an action affecting the watchtower
+        # (formally described as a sequence of transitions) based on the configured
+        # probabilities and the historical data of the current block.
+        # Then, populate some data at this block for later analysis (see the plot()
+        # method).
+        for block in range(start_block, end_block):
+            # First of all, was any transaction confirmed in this block?
+            self.confirm_sequence(block)
+
+            try:
+                # Refill once per refill period
+                if block % self.refill_period == 0:
+                    self.refill_sequence(block, 0)
+
+                if random.random() < self.delegation_rate / BLOCKS_PER_DAY:
+                    self.delegate_sequence(block)
+
+                # The spend rate is a rate per day
+                if random.random() < self.spend_rate / BLOCKS_PER_DAY:
+                    # generate invalid spend, requires cancel
+                    if random.random() < self.invalid_spend_rate:
+                        try:
+                            self.cancel_sequence(block)
+                        except NoVaultToSpend:
+                            logging.debug("Failed to Cancel, no vault to spend")
+                    # generate valid spend, requires processing
+                    else:
+                        try:
+                            self.spend_sequence(block)
+                        except NoVaultToSpend:
+                            logging.debug("Failed to Spend, no vault to spend")
+
+                # The catastrophe rate is a rate per day
+                if random.random() < self.catastrophe_rate / BLOCKS_PER_DAY:
+                    try:
+                        self.catastrophe_sequence(block)
+                    except NoVaultToSpend:
+                        logging.debug(
+                            "Failed to Cancel (catastrophe), no vault to spend"
+                        )
+                    # Reboot operation after catastrophe
+                    self.refill_sequence(block, self.expected_active_vaults)
+
+            except (AllocationError):
+                self.end_block = block
+                logging.error(f"Allocation error at block {block}")
+                break
+
+            if self.with_balance:
+                self.balances.append(
+                    [
+                        block,
+                        self.wt.balance(),
+                        self.required_reserve(block),
+                        self.wt.unallocated_balance(),
+                    ]
+                )
+
+            if self.with_risk_status:
+                status = self.wt.risk_status(block)
+                if (status["vaults_at_risk"] != 0) or (
+                    status["delegation_requires"] != 0
+                ):
+                    self.risk_status.append(status)
+            if self.with_op_cost or self.with_cum_op_cost:
+                self.costs.append(
+                    [block, self.refill_fee, self.cf_fee, self.cancel_fee]
+                )
+                self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
+
+            if self.with_coin_pool_age:
+                try:
+                    processed = [
+                        coin for coin in self.wt.list_coins() if coin.is_processed()
+                    ]
+                    ages = [block - coin.fan_block for coin in processed]
+                    age = sum(ages)
+                    self.coin_pool_age.append([block, age])
+                except:
+                    pass  # If processed is empty, error raised
+
+            if self.with_cum_op_cost:
+                # Check if wt becomes risky
+                if switch == "good":
+                    for vault in self.wt.list_available_vaults():
+                        if self.wt.under_requirement(vault, block) != 0:
+                            switch = "bad"
+                            break
+                    if switch == "bad":
+                        risk_on = block
+
+                # Check if wt no longer risky
+                if switch == "bad":
+                    any_risk = []
+                    for vault in self.wt.list_available_vaults():
+                        if self.wt.under_requirement(vault, block) != 0:
+                            any_risk.append(True)
+                            break
+                    if True not in any_risk:
+                        switch = "good"
+                        risk_off = block
+                        self.wt_risk_time.append((risk_on, risk_off))
+
+            if self.with_divergence:
+                self._reserve_divergence(block)
+
+            if self.with_fb_coins_dist:
+                if block % 1000 == 0:
+                    self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
+                self.vm_values.append([block, self.wt.Vm(block)])
+
+    def run_at_scale(self, start_block, end_block):
         """Iterate from {start_block} to {end_block}, executing transitions
         according to configuration.
         """
@@ -856,6 +982,7 @@ if __name__ == "__main__":
         spend_rate=1,
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
+        delegation_rate=1,
         with_balance=False,
         with_divergence=False,
         with_op_cost=False,
