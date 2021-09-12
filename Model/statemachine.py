@@ -842,9 +842,10 @@ class StateMachine:
         assert vault.is_available(), "FIXME"
 
         try:
-            init_fee = self._estimate_smart_feerate(block_height)
+            feerate = self._estimate_smart_feerate(block_height)
         except (ValueError, KeyError):
-            init_fee = self._feerate(block_height)
+            feerate = self._feerate(block_height)
+        needed_fee = self.cancel_tx_fee(feerate, 0)
 
         cancel_fb_inputs = []
 
@@ -872,7 +873,7 @@ class StateMachine:
         #     raise RuntimeError(f"Fee reserve for vault {vault['id']} was insufficient to process cancel tx")
 
         # Strat 3: select smallest coin to cover init_fee, if no coin, remove largest and try again.
-        while init_fee > 0:
+        while needed_fee > 0:
             if vault.allocated_coins() == []:
                 raise RuntimeError(
                     f"Fee reserve for vault {vault.id} was insufficient to process"
@@ -882,14 +883,14 @@ class StateMachine:
             # sort in increasing order of amount
             reserve = sorted(vault.allocated_coins(), key=lambda coin: coin.amount)
             try:
-                fbcoin = next(coin for coin in reserve if coin.amount > init_fee)
+                fbcoin = next(coin for coin in reserve if coin.amount >= needed_fee)
                 self.remove_coin(fbcoin)
                 cancel_fb_inputs.append(fbcoin)
                 break
             except (StopIteration):
                 fbcoin = reserve[-1]
                 self.remove_coin(fbcoin)
-                init_fee -= fbcoin.amount
+                needed_fee -= fbcoin.amount
                 cancel_fb_inputs.append(fbcoin)
 
         vault.set_status(VaultState.CANCELING)
