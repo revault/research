@@ -209,6 +209,7 @@ class StateMachine:
         self,
         n_stk,
         n_man,
+        locktime,
         hist_feerate_csv,
         reserve_strat,
         estimate_strat,
@@ -218,6 +219,7 @@ class StateMachine:
     ):
         self.n_stk = n_stk
         self.n_man = n_man
+        self.locktime = locktime
         self.vaults = {}
         self.coin_pool = CoinPool()
         # List of relevant unconfirmed transactions: [Tx, Tx, Tx,...]
