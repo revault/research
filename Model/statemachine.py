@@ -290,6 +290,9 @@ class StateMachine:
         """Return feerate reserve per vault (satoshi/vbyte). The value is determined from a
         statistical analysis of historical feerates, using one of the implemented strategies
         chosen with the self.reserve_strat parameter.
+
+        Note how we assume the presigned feerate to be 0. It's 88 "For Real"
+        (in practical-revault).
         """
         if self.frpv[0] == block_height:
             return self.frpv[1]

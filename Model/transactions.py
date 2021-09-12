@@ -39,7 +39,7 @@ class CancelTx(Transaction):
         super().__init__(broadcast_height)
         self.vault_id = vault_id
         self.size = size_vb
-        self.fee = (
-            self.size * CANCEL_TX_PRESIGNED_FEERATE + len(fbcoins) * P2WPKH_INPUT_SIZE
-        )
+        # Note: we assume the presigned feerate to be 0, while it's 88 by
+        # practical-revault specs
+        self.fee = sum(c.amount for c in fbcoins)
         self.fbcoins = fbcoins
