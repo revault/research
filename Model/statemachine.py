@@ -283,17 +283,6 @@ class StateMachine:
             self.coin_pool.deallocate_coin(coin)
         del self.vaults[vault.id]
 
-    def _estimate_smart_feerate(self, block_height):
-        # FIXME: why always 1-2 ??
-        # If data isnan or less than or equal to 0, return value error
-        estimate = self.hist_df["Est 1block"][block_height]
-        if np.isnan(estimate) or (estimate <= 0):
-            raise (
-                ValueError(f"No estimate smart feerate data at block {block_height}")
-            )
-        else:
-            return estimate
-
     def _feerate_reserve_per_vault(self, block_height):
         """Return feerate reserve per vault (satoshi/vbyte). The value is determined from a
         statistical analysis of historical feerates, using one of the implemented strategies
@@ -358,6 +347,12 @@ class StateMachine:
 
         self.feerate = (block_height, self.hist_df[self.estimate_strat][block_height])
         return self.feerate[1]
+
+    def next_block_feerate(self, height):
+        try:
+            return int(self.hist_df["est_1block"][height])
+        except ValueError:
+            return None
 
     def cancel_vbytes(self):
         """Size of the Cancel transaction without any feebump input"""
@@ -626,9 +621,8 @@ class StateMachine:
         else:
             raise CfError("Unknown algorithm version for coin consolidation")
 
-        try:
-            feerate = self._estimate_smart_feerate(block_height)
-        except (ValueError, KeyError):
+        feerate = self.next_block_feerate(block_height)
+        if feerate is None:
             feerate = self._feerate(block_height)
 
         # FIXME this doesn't re-create enough coins? If we consolidated some.
@@ -858,9 +852,8 @@ class StateMachine:
         # FIXME: i think this doesn't hold
         assert vault.is_available(), "FIXME"
 
-        try:
-            feerate = self._estimate_smart_feerate(block_height)
-        except (ValueError, KeyError):
+        feerate = self.next_block_feerate(block_height)
+        if feerate is None:
             feerate = self._feerate(block_height)
         needed_fee = self.cancel_tx_fee(feerate, 0)
 
