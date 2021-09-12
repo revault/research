@@ -362,25 +362,13 @@ class StateMachine:
         """Size of the Cancel transaction without any feebump input"""
         return (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
 
-    # FIXME: remove tx_type!!
-    def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
-        """Convert feerate (satoshi/vByte) into transaction fee (satoshi).
-
-        Keyword arguments:
-        feerate - the feerate to be converted
-        tx_type - 'cancel', 'emergency', or 'unemergency'
-        n_fb_inputs - number of feebump inputs included in the tx's size
-        """
-        if tx_type not in ["cancel", "emergency", "unemergency"]:
-            raise ValueError("Invalid tx_type")
-        # feerate is in satoshis/vbyte
+    def cancel_tx_fee(self, feerate, n_fb_inputs):
+        """Get the Cancel tx fee at this feerate for this number of fb txins."""
         cancel_tx_size = self.cancel_vbytes() + n_fb_inputs * P2WPKH_INPUT_SIZE
         return int(cancel_tx_size * feerate)
 
     def fee_reserve_per_vault(self, block_height):
-        return self._feerate_to_fee(
-            self._feerate_reserve_per_vault(block_height), "cancel", 0
-        )
+        return self.cancel_tx_fee(self._feerate_reserve_per_vault(block_height), 0)
 
     def is_tx_confirmed(self, tx, height):
         """We consider a transaction to have been confirmed in this block if its
@@ -396,9 +384,7 @@ class StateMachine:
             return self.Vm_cache[1]
 
         feerate = self._feerate(block_height)
-        Vm = int(
-            self._feerate_to_fee(feerate, "cancel", 0) + feerate * P2WPKH_INPUT_SIZE
-        )
+        Vm = int(self.cancel_tx_fee(feerate, 0) + feerate * P2WPKH_INPUT_SIZE)
         if Vm <= 0:
             raise ValueError(
                 f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
@@ -411,7 +397,7 @@ class StateMachine:
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
         t1 = (reserve - self.Vm(block_height)) / self.O_0_factor
-        t2 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(10, "cancel", 0)
+        t2 = reserve_rate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(1, 0)
         return int(max(t1, t2))
 
     def fb_coins_dist(self, block_height):
@@ -479,7 +465,7 @@ class StateMachine:
         Note: t1 is same as the lower bound of Vb.
         """
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(1, "cancel", 0)
+        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(1, 0)
         t2 = self.Vm(block_height)
         minimum = min(t1, t2)
         if coin.amount <= minimum:
@@ -557,9 +543,7 @@ class StateMachine:
             - Unallocated ones ones we would not create, if the current feerate is low.
         """
         reserve_feerate = self._feerate_reserve_per_vault(height)
-        dust_threshold = reserve_feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(
-            1, "cancel", 0
-        )
+        dust_threshold = reserve_feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(1, 0)
         # FIXME: this should use the next 3 blocks feerate
         low_feerate = self._feerate(height) <= 5
         min_fbcoin_value = self.min_fbcoin_value(height)
@@ -588,7 +572,7 @@ class StateMachine:
         tx fee by at least 5sat/vbyte.
         """
         feerate = self._feerate_reserve_per_vault(height)
-        return int(feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(5, "cancel", 0))
+        return int(feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(5, 0))
 
     def broadcast_consolidate_fanout(self, block_height):
         """
