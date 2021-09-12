@@ -400,21 +400,18 @@ class StateMachine:
             return self.Vm_cache[1]
 
         feerate = self._feerate(block_height)
-        Vm = int(self.cancel_tx_fee(feerate, 0) + feerate * P2WPKH_INPUT_SIZE)
-        if Vm <= 0:
-            raise ValueError(
-                f"Vm = {Vm} for block {block_height}. Shouldn't be non-positive."
-            )
-        self.Vm_cache = (block_height, Vm)
-        return Vm
+        vm = int(self.cancel_tx_fee(feerate, 0) + feerate * P2WPKH_INPUT_SIZE)
+        assert vm > 0
+        self.Vm_cache = (block_height, vm)
+        return vm
 
     def Vb(self, block_height):
         """Amount for a backup feebump coin"""
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = (reserve - self.Vm(block_height)) / self.O_0_factor
-        t2 = reserve_rate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(1, 0)
-        return int(max(t1, t2))
+        vb = reserve / self.O_0_factor
+        min_vb = self.cancel_tx_fee(10, 0)
+        return int(reserve_rate * P2WPKH_INPUT_SIZE + max(vb, min_vb))
 
     def fb_coins_dist(self, block_height):
         """The coin distribution to create with a CF TX.
@@ -433,21 +430,23 @@ class StateMachine:
         # Strategy 1
         # dist = [Vm, MVm, 2MVm, 3MVm, ...]
         if self.O_version == 1:
+            reserve_feerate = self._feerate_reserve_per_vault(block_height)
+            fbcoin_cost = int(reserve_feerate * P2WPKH_INPUT_SIZE)
             frpv = self.fee_reserve_per_vault(block_height)
             Vm = self.Vm(block_height)
             M = self.O_1_factor  # Factor increase per coin
             dist = [Vm]
-            while sum(dist) < frpv:
-                dist.append(int((len(dist)) * M * Vm))
-            diff = sum(dist) - frpv
+            while sum(dist) < frpv - len(dist) * fbcoin_cost:
+                dist.append(int((len(dist)) * M * Vm + fbcoin_cost))
+            diff = sum(dist) - frpv - int(len(dist) * fbcoin_cost)
             # find the minimal subset sum of elements that is greater than diff, and remove them
             subset = []
             while sum(subset) < diff:
                 subset.append(dist.pop())
             excess = sum(subset) - diff
             assert isinstance(excess, int)
-            if excess >= Vm:
-                dist.append(excess)
+            if excess >= Vm + fbcoin_cost:
+                dist.append(excess + fbcoin_cost)
             else:
                 dist[-1] += excess
             return dist
