@@ -860,8 +860,6 @@ class StateMachine:
             feerate = self._feerate(block_height)
         needed_fee = self.cancel_tx_fee(feerate, 0)
 
-        cancel_fb_inputs = []
-
         # Strat 1: randomly select coins until the fee is met
         # Performs moderately bad in low-stable fee market and ok in volatile fee market
         # while init_fee > 0:
@@ -885,13 +883,16 @@ class StateMachine:
         # if vault['fee_reserve'] == []:
         #     raise RuntimeError(f"Fee reserve for vault {vault['id']} was insufficient to process cancel tx")
 
+        cancel_fb_inputs = []
         if self.cancel_coin_selection == 0:
             cancel_fb_inputs = self.cancel_coin_selec_0(vault, needed_fee, feerate)
         elif self.cancel_coin_selection == 1:
             cancel_fb_inputs = self.cancel_coin_selec_1(vault, needed_fee, feerate)
 
         vault.set_status(VaultState.CANCELING)
-        self.mempool.append(CancelTx(block_height, vault.id, self.cancel_vbytes()))
+        self.mempool.append(
+            CancelTx(block_height, vault.id, self.cancel_vbytes(), cancel_fb_inputs)
+        )
 
         return cancel_fb_inputs
 
@@ -960,6 +961,44 @@ class StateMachine:
         if self.is_tx_confirmed(tx, height):
             self.remove_vault(self.vaults[tx.vault_id])
             self.mempool.remove(tx)
+        else:
+            self.maybe_replace_cancel(height, tx)
+
+    def maybe_replace_cancel(self, height, tx):
+        """Broadcasts a replacement cancel transaction if feerate increased.
+
+        Updates the coin_pool and the associated vault.
+        """
+        vault = self.vaults[tx.vault_id]
+        new_feerate = self.next_block_feerate(height)
+        if new_feerate is None:
+            new_feerate = self._feerate(height)
+
+        logging.debug(
+            f"Checking if we need feebump Cancel tx for vault {vault.id}."
+            f" Tx feerate: {tx.feerate()}, next block feerate: {new_feerate}"
+        )
+        if new_feerate > tx.feerate():
+            new_fee = self.cancel_tx_fee(new_feerate, 0)
+            # Bitcoin Core policy is set to 1, take some leeway by setting
+            # it to 2.
+            min_fee = tx.fee + self.cancel_tx_fee(2, len(tx.fbcoins))
+            needed_fee = max(new_fee, min_fee)
+
+            # Unreserve the previous feebump coins and remove the previous tx
+            for coin in tx.fbcoins:
+                self.coin_pool.add_coin(
+                    coin.amount, coin.processing_state, coin.fan_block, vault.id
+                )
+                self.coin_pool.allocate_coin(coin, vault)
+            self.mempool.remove(tx)
+
+            # Push a new tx with coins selected to meet the new fee
+            if self.cancel_coin_selection == 0:
+                coins = self.cancel_coin_selec_0(vault, needed_fee, new_feerate)
+            elif self.cancel_coin_selection == 1:
+                coins = self.cancel_coin_selec_1(vault, needed_fee, new_feerate)
+            self.mempool.append(CancelTx(height, vault.id, self.cancel_vbytes(), coins))
 
     def spend(self, vault_id, height):
         """Handle a broadcasted Spend transaction.
@@ -972,20 +1011,6 @@ class StateMachine:
         we are interested in (it does not affect the availability of feebump coins).
         """
         self.remove_vault(self.vaults[vault_id])
-
-    def feebump(self, tx):
-        """Uses the inputs in the cancel tx and the remaining coins in the vault's
-        fb_coins to construct a replacement cancel tx.
-        """
-        pass
-
-    def replace_cancel(self, tx):
-        """Broadcasts a replacement cancel transaction. Updates the coin_pool
-        and the associated vault.
-        FIXME: How should inputs that were in the first version of the cancel
-        but not in the replacement be handled?
-        """
-        pass
 
     def risk_status(self, block_height):
         """Return a summary of the risk status for the set of vaults being watched."""

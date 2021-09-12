@@ -35,11 +35,11 @@ class ConsolidateFanoutTx(Transaction):
 
 
 class CancelTx(Transaction):
-    def __init__(self, broadcast_height, vault_id, size_vb):
+    def __init__(self, broadcast_height, vault_id, size_vb, fbcoins):
         super().__init__(broadcast_height)
         self.vault_id = vault_id
         self.size = size_vb
-        self.fee = self.size * CANCEL_TX_PRESIGNED_FEERATE
-
-    def bump_fee(self, bump):
-        self.fee += bump
+        self.fee = (
+            self.size * CANCEL_TX_PRESIGNED_FEERATE + len(fbcoins) * P2WPKH_INPUT_SIZE
+        )
+        self.fbcoins = fbcoins
