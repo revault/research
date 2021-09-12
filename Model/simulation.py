@@ -1,11 +1,17 @@
+"""
+TODO:
+Update sequences to handle transaction broadcast & finalize. 
+"""
+
 import logging
 import random
 
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
-from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
 from statemachine import StateMachine
+from transactions import ConsolidateFanoutTx, CancelTx
+from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
 
 
 class AllocationError(Exception):
@@ -156,67 +162,26 @@ class Simulation(object):
         return int(R)
 
     def _reserve_divergence(self, block_height):
-        if self.wt.list_vaults() != []:
+        vaults = self.wt.list_available_vaults()
+        if vaults != []:
             divergence = []
             frpv = self.wt.fee_reserve_per_vault(block_height)
-            for vault in self.wt.list_vaults():
+            for vault in vaults:
                 div = vault.reserve_balance() - frpv
                 divergence.append(div)
             # block, mean div, min div, max div
             self.divergence.append(
                 [
                     block_height,
-                    sum(divergence) / len(self.wt.list_vaults()),
+                    sum(divergence) / len(vaults),
                     min(divergence),
                     max(divergence),
                 ]
             )
 
-    def initialize_sequence(self, block_height):
-        logging.debug(f"Initialize sequence at block {block_height}")
-        # Refill transition
-        refill_amount = self.amount_needed(block_height, self.expected_active_vaults)
-        if refill_amount <= 0:
-            logging.debug(f"  Refill not required, WT has enough bitcoin")
-        else:
-            self.wt.refill(refill_amount)
-            logging.debug(
-                f"  Refill transition at block {block_height} by {refill_amount}"
-            )
+    def refill_sequence(self, block_height, expected_new_vaults):
+        refill_amount = self.amount_needed(block_height, expected_new_vaults)
 
-            # Track operational costs
-            # FIXME: 2in 2out
-            try:
-                self.refill_fee = 109.5 * self.wt._estimate_smart_feerate(block_height)
-            # FIXME: why key error?
-            except (ValueError, KeyError):
-                self.refill_fee = 109.5 * self.wt._feerate(block_height)
-
-            # snapshot coin pool after refill Tx
-            if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_refill.append([block_height, amounts])
-
-            # Consolidate-fanout transition
-            self.cf_fee = self.wt.consolidate_fanout(block_height)
-            logging.debug(
-                f"  Consolidate-fanout transition at block {block_height} with fee:"
-                f" {self.cf_fee}"
-            )
-
-            # snapshot coin pool after CF Tx
-            if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_cf.append([block_height, amounts])
-
-        # Allocation transitions
-        for i in range(0, self.expected_active_vaults):
-            amount = int(10e10)  # 100 BTC
-            self.wt.allocate(self.new_vault_id(), amount, block_height)
-            self.vault_count += 1
-
-    def refill_sequence(self, block_height):
-        refill_amount = self.amount_needed(block_height, 0)
         if refill_amount > 0:
             logging.debug(f"Refill sequence at block {block_height}")
             # Refill transition
@@ -232,14 +197,14 @@ class Simulation(object):
             except (ValueError, KeyError):
                 self.refill_fee = 109.5 * self.wt._feerate(block_height)
 
-            # snapshot coin pool after refill Tx
+            # snapshot coin pool after refill confirmation
             if self.with_coin_pool:
                 amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_refill.append([block_height, amounts])
 
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
-            self.cf_fee = self.wt.consolidate_fanout(block_height)
+            self.cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
             logging.debug(
                 f"  Consolidate-fanout transition at block {block_height} with fee:"
                 f" {self.cf_fee}"
@@ -250,15 +215,13 @@ class Simulation(object):
                 amounts = [coin.amount for coin in self.wt.list_coins()]
                 self.pool_after_cf.append([block_height, amounts])
 
-            # Top up sequence
-            # Top up delegations after confirmation of CF Tx, because consolidating coins
-            # can diminish the fee_reserve of a vault
-            self.top_up_sequence(block_height)
+        else:
+            logging.debug(f"  Refill not required, WT has enough bitcoin")
 
-    def _spend_init(self, block_height):
+    def delegate_sequence(self, block_height):
         # Top up sequence
-        # Top up delegations before processing a delegation, because time has passed, and we mustn't accept
-        # delegation if the available coin pool is insufficient.
+        # Top up allocations before processing a delegation, because time has passed, and
+        # we mustn't accept a delegation if the available coin pool is insufficient.
         self.top_up_sequence(block_height)
 
         # Allocation transition
@@ -276,12 +239,9 @@ class Simulation(object):
             logging.debug(f"  Allocation transition FAILED for vault {vault_id}")
             raise (AllocationError())
 
-        # choose a random vault to spend
-        return random.choice(self.wt.list_vaults()).id
-
     def top_up_sequence(self, block_height):
         # loop over copy since allocate may remove an element, changing list index
-        for vault in list(self.wt.list_vaults()):
+        for vault in list(self.wt.list_available_vaults()):
             try:
                 # Allocation transition
                 logging.debug(
@@ -296,13 +256,13 @@ class Simulation(object):
 
     def spend_sequence(self, block_height):
         logging.debug(f"Spend sequence at block {block_height}")
-        if len(self.wt.list_vaults()) == 0:
+        if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
-        vaultID = self._spend_init(block_height)
+        vault_id = random.choice(self.wt.list_available_vaults()).id
         # Spend transition
         logging.debug(f"  Spend transition at block {block_height}")
-        self.wt.process_spend(vaultID)
+        self.wt.spend(vault_id, block_height)
 
         # snapshot coin pool after spend attempt
         if self.with_coin_pool:
@@ -311,13 +271,12 @@ class Simulation(object):
 
     def cancel_sequence(self, block_height):
         logging.debug(f"Cancel sequence at block {block_height}")
-        if len(self.wt.list_vaults()) == 0:
+        if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
-        vault_id = self._spend_init(block_height)
+        vault_id = random.choice(self.wt.list_available_vaults()).id
         # Cancel transition
-        cancel_inputs = self.wt.process_cancel(vault_id, block_height)
-        self.wt.finalize_cancel(vault_id)
+        cancel_inputs = self.wt.broadcast_cancel(vault_id, block_height)
         self.cancel_fee = sum(coin.amount for coin in cancel_inputs)
         logging.debug(
             f"  Cancel transition with vault {vault_id} for fee: {self.cancel_fee}"
@@ -337,17 +296,16 @@ class Simulation(object):
             self.overpayments.append([block_height, self.cancel_fee - feerate])
 
     def catastrophe_sequence(self, block_height):
-        if len(self.wt.list_vaults()) == 0:
+        if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
         # Topup sequence
         self.top_up_sequence(block_height)
 
         logging.debug(f"Catastrophe sequence at block {block_height}")
-        for vault in self.wt.list_vaults():
+        for vault in self.wt.list_available_vaults():
             # Cancel transition
-            cancel_inputs = self.wt.process_cancel(vault.id, block_height)
-            self.wt.finalize_cancel(vault.id)
+            cancel_inputs = self.wt.broadcast_cancel(vault.id, block_height)
             # If a cancel fee has already been paid this block, sum those fees
             # so that when plotting costs this will appear as one total operation
             # rather than several separate cancel operations
@@ -366,6 +324,21 @@ class Simulation(object):
             amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_catastrophe.append([block_height, amounts])
 
+    def confirm_sequence(self, height):
+        """State transition which considers each tx in WT's mempool and checks if the offered
+        fee-rate is sufficient.
+        If so, applies the transaction to the state.
+        If not, handles rejection for cancel transaction type or does nothing for others.
+        """
+        for tx in self.wt.unconfirmed_transactions():
+            if isinstance(tx, ConsolidateFanoutTx):
+                self.wt.finalize_consolidate_fanout(tx, height)
+                self.top_up_sequence(height)
+            elif isinstance(tx, CancelTx):
+                self.wt.finalize_cancel(tx, height)
+            else:
+                raise
+
     def run(self, start_block, end_block):
         """Iterate from {start_block} to {end_block}, executing transitions
         according to configuration.
@@ -374,7 +347,12 @@ class Simulation(object):
         self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
         switch = "good"
 
-        self.initialize_sequence(start_block)
+        # At startup allocate as many reserves as we expect to have vaults
+        logging.debug(
+            f"Initializing at block {start_block} with {self.expected_active_vaults}"
+            " new vaults"
+        )
+        self.refill_sequence(start_block, self.expected_active_vaults)
 
         # For each block in the range, simulate an action affecting the watchtower
         # (formally described as a sequence of transitions) based on the configured
@@ -382,13 +360,27 @@ class Simulation(object):
         # Then, populate some data at this block for later analysis (see the plot()
         # method).
         for block in range(start_block, end_block):
+            # First of all, was any transaction confirmed in this block?
+            self.confirm_sequence(block)
+
+            # We always try to keep the number of expected vaults under watch. We might
+            # not be able to allocate if a CF tx is pending but not yet confirmed.
+            for i in range(len(self.wt.list_vaults()), self.expected_active_vaults):
+                amount = int(10e10)  # 100 BTC
+                try:
+                    self.wt.allocate(self.new_vault_id(), amount, block)
+                except RuntimeError:
+                    logging.info("Not enough funds to allocate all the expected vaults")
+                self.vault_count += 1
+
             try:
                 # Refill once per refill period
                 if block % self.refill_period == 0:
-                    self.refill_sequence(block)
+                    self.refill_sequence(block, 0)
 
                 # The spend rate is a rate per day
                 if random.random() < self.spend_rate / BLOCKS_PER_DAY:
+                    self.delegate_sequence(block)
                     # generate invalid spend, requires cancel
                     if random.random() < self.invalid_spend_rate:
                         try:
@@ -407,9 +399,11 @@ class Simulation(object):
                     try:
                         self.catastrophe_sequence(block)
                     except NoVaultToSpend:
-                        logging.debug("Failed to Cancel (catastrophe), no vault to spend")
+                        logging.debug(
+                            "Failed to Cancel (catastrophe), no vault to spend"
+                        )
                     # Reboot operation after catastrophe
-                    self.initialize_sequence(block)
+                    self.refill_sequence(block, self.expected_active_vaults)
             except (AllocationError):
                 self.end_block = block
                 logging.error(f"Allocation error at block {block}")
@@ -451,7 +445,7 @@ class Simulation(object):
             if self.with_cum_op_cost:
                 # Check if wt becomes risky
                 if switch == "good":
-                    for vault in self.wt.list_vaults():
+                    for vault in self.wt.list_available_vaults():
                         if self.wt.under_requirement(vault, block) != 0:
                             switch = "bad"
                             break
@@ -461,7 +455,7 @@ class Simulation(object):
                 # Check if wt no longer risky
                 if switch == "bad":
                     any_risk = []
-                    for vault in self.wt.list_vaults():
+                    for vault in self.wt.list_available_vaults():
                         if self.wt.under_requirement(vault, block) != 0:
                             any_risk.append(True)
                             break
@@ -531,18 +525,23 @@ class Simulation(object):
             costs_df.plot.scatter(
                 x="block",
                 y="Refill Fee",
-                s=6,
+                s=10,
                 color="r",
                 ax=axes[plot_num],
                 label="Refill Fee",
             )
             costs_df.plot.scatter(
-                x="block", y="CF Fee", s=6, color="g", ax=axes[plot_num], label="CF Fee"
+                x="block",
+                y="CF Fee",
+                s=10,
+                color="g",
+                ax=axes[plot_num],
+                label="CF Fee",
             )
             costs_df.plot.scatter(
                 x="block",
                 y="Cancel Fee",
-                s=6,
+                s=10,
                 color="b",
                 ax=axes[plot_num],
                 label="Cancel Fee",
@@ -851,6 +850,7 @@ class Simulation(object):
 
         if show:
             plt.show()
+
 
 # FIXME: eventually have some small pytests
 if __name__ == "__main__":

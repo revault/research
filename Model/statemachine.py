@@ -11,7 +11,9 @@ TODO:
 import logging
 import numpy as np
 from copy import deepcopy
+from enum import Enum
 from pandas import read_csv
+from transactions import CancelTx, ConsolidateFanoutTx
 from utils import (
     P2WPKH_INPUT_SIZE,
     P2WPKH_OUTPUT_SIZE,
@@ -29,15 +31,33 @@ class CfError(RuntimeError):
         self.message = message
 
 
+class ProcessingState(Enum):
+    """The state of feebump coin"""
+
+    UNPROCESSED = 0
+    PENDING = 1
+    CONFIRMED = 2
+
+
+class VaultState(Enum):
+    """Whether a vault is being"""
+
+    READY = 0
+    SPENDING = 1
+    CANCELING = 2
+
+
 class Vault:
     """A vault the WT is watching for."""
 
-    def __init__(self, _id, amount):
+    def __init__(self, _id, amount, status=VaultState.READY):
         assert isinstance(amount, int) and isinstance(_id, int)
         self.id = _id
         self.amount = amount
         # The feebump coins that were allocated to this vault
         self.fb_coins = {}
+        # status used to track whether vault should be considered during other state transitions
+        self.status = status
 
     def __repr__(self):
         return f"Vault(id={self.id}, amount={self.amount}, coins={self.fb_coins})"
@@ -47,6 +67,7 @@ class Vault:
 
     def allocate_coin(self, coin):
         assert coin.id not in self.fb_coins
+        assert coin.is_confirmed()
         self.fb_coins[coin.id] = coin
 
     def deallocate_coin(self, coin):
@@ -58,26 +79,56 @@ class Vault:
     def reserve_balance(self):
         return sum(c.amount for c in self.fb_coins.values())
 
+    def set_status(self, status):
+        assert isinstance(status, VaultState)
+        self.status = status
+
+    def is_available(self):
+        return self.status == VaultState.READY
+
 
 class FeebumpCoin:
     """A coin in the WT wallet that will eventually be used to feebump."""
 
-    def __init__(self, _id, amount, fan_block=None):
+    def __init__(
+        self, _id, amount, processing_state=ProcessingState.UNPROCESSED, fan_block=None
+    ):
+        assert fan_block is None or processing_state == ProcessingState.CONFIRMED
         assert isinstance(amount, int) and isinstance(_id, int)
         self.id = _id
         self.amount = amount
-        # The block at which it was created by the CF tx, tracked because of
-        # grab_coins_1
+        self.processing_state = processing_state
+        # If confirmed, the block at which it was created by the CF tx,
+        # tracked because of grab_coins_1
         self.fan_block = fan_block
 
     def __repr__(self):
         return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block})"
 
-    def is_processed(self):
-        return self.fan_block is not None
+    def is_confirmed(self):
+        """Whether this coin was fanned out and confirmed"""
+        if self.processing_state == ProcessingState.CONFIRMED:
+            assert self.fan_block is not None
+            return True
+        return False
+
+    def is_unconfirmed(self):
+        """Whether this coin was fanned out but not yet confirmed"""
+        if self.processing_state == ProcessingState.PENDING:
+            assert self.fan_block is None
+            return True
+        return False
+
+    def is_unprocessed(self):
+        """Whether this coin is a new refill coin"""
+        return self.processing_state == ProcessingState.UNPROCESSED
 
     def increase_amount(self, value_increase):
         self.amount += value_increase
+
+    def confirm(self, height):
+        self.processing_state = ProcessingState.CONFIRMED
+        self.fan_block = height
 
 
 class CoinPool:
@@ -115,24 +166,34 @@ class CoinPool:
         return [
             c
             for c in self.coins.values()
-            if c.is_processed() and c.id not in self.allocation_map
+            if c.is_confirmed() and c.id not in self.allocation_map
         ]
 
     def allocate_coin(self, coin, vault):
         assert isinstance(coin, FeebumpCoin) and isinstance(vault, Vault)
         assert coin.id not in self.allocation_map
+        assert coin.is_confirmed()
         self.allocation_map[coin.id] = vault.id
 
     def deallocate_coin(self, coin):
         del self.allocation_map[coin.id]
 
-    def add_coin(self, amount, fan_block=None, allocated_vault_id=None):
+    def add_coin(
+        self,
+        amount,
+        processing_state=ProcessingState.UNPROCESSED,
+        fan_block=None,
+        allocated_vault_id=None,
+    ):
         coin_id = self.new_coin_id()
-        self.coins[coin_id] = FeebumpCoin(coin_id, amount, fan_block)
+        self.coins[coin_id] = FeebumpCoin(coin_id, amount, processing_state, fan_block)
         if allocated_vault_id is not None:
             assert isinstance(allocated_vault_id, int)
             self.allocation_map[coin_id] = allocated_vault_id
         return self.coins[coin_id]
+
+    def confirm_coin(self, coin, fan_height):
+        self.coins[coin.id].confirm(fan_height)
 
     def remove_coin(self, coin):
         """Remove a coin from the pool by value"""
@@ -159,6 +220,8 @@ class StateMachine:
         self.n_man = n_man
         self.vaults = {}
         self.coin_pool = CoinPool()
+        # List of relevant unconfirmed transactions: [Tx, Tx, Tx,...]
+        self.mempool = []
 
         self.hist_df = read_csv(
             hist_feerate_csv, parse_dates=True, index_col="block_height"
@@ -175,7 +238,7 @@ class StateMachine:
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
-        self.I_2_tol = 0.2
+        self.I_2_tol = 0.3
 
         # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
         self.frpv = (None, None)  # block, value
@@ -185,8 +248,14 @@ class StateMachine:
     def list_vaults(self):
         return list(self.vaults.values())
 
+    def list_available_vaults(self):
+        return [v for v in self.list_vaults() if v.is_available()]
+
     def list_coins(self):
         return list(self.coin_pool.list_coins())
+
+    def unconfirmed_transactions(self):
+        return self.mempool
 
     def remove_coin(self, coin):
         if self.coin_pool.is_allocated(coin):
@@ -289,6 +358,10 @@ class StateMachine:
         self.feerate = (block_height, self.hist_df[self.estimate_strat][block_height])
         return self.feerate[1]
 
+    def cancel_vbytes(self):
+        """Size of the Cancel transaction without any feebump input"""
+        return (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
+
     # FIXME: remove tx_type!!
     def _feerate_to_fee(self, feerate, tx_type, n_fb_inputs):
         """Convert feerate (satoshi/vByte) into transaction fee (satoshi).
@@ -301,14 +374,21 @@ class StateMachine:
         if tx_type not in ["cancel", "emergency", "unemergency"]:
             raise ValueError("Invalid tx_type")
         # feerate is in satoshis/vbyte
-        cancel_tx_size_no_fb = (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
-        cancel_tx_size = cancel_tx_size_no_fb + n_fb_inputs * P2WPKH_INPUT_SIZE
+        cancel_tx_size = self.cancel_vbytes() + n_fb_inputs * P2WPKH_INPUT_SIZE
         return int(cancel_tx_size * feerate)
 
     def fee_reserve_per_vault(self, block_height):
         return self._feerate_to_fee(
             self._feerate_reserve_per_vault(block_height), "cancel", 0
         )
+
+    def is_tx_confirmed(self, tx, height):
+        """We consider a transaction to have been confirmed in this block if its
+        feerate was above the min feerate in this block."""
+        # FIXME: this is wrong!! min feerate is always 0 or 1 because sponsored txs!
+        min_feerate = self.hist_df["min_feerate"][height]
+        min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
+        return tx.feerate() > min_feerate
 
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
@@ -371,7 +451,13 @@ class StateMachine:
             return dist
 
     def unallocated_balance(self):
-        return sum([coin.amount for coin in self.coin_pool.unallocated_coins()])
+        return sum(
+            [
+                coin.amount
+                for coin in self.coin_pool.list_coins()
+                if not self.coin_pool.is_allocated(coin)
+            ]
+        )
 
     def balance(self):
         return self.coin_pool.balance()
@@ -422,8 +508,8 @@ class StateMachine:
         or are negligible.
         """
         return self.remove_coins(
-            lambda coin: not coin.is_processed()
-            or self.is_negligible(coin, block_height)
+            lambda coin: not coin.is_unconfirmed()
+            and (coin.is_unprocessed() or self.is_negligible(coin, block_height))
         )
 
     def grab_coins_2(self, block_height):
@@ -445,7 +531,9 @@ class StateMachine:
             return False
 
         def coin_filter(coin):
-            if not coin.is_processed():
+            if coin.is_unconfirmed():
+                return False
+            if coin.is_unprocessed():
                 return True
 
             if not self.coin_pool.is_allocated(coin):
@@ -477,7 +565,9 @@ class StateMachine:
         min_fbcoin_value = self.min_fbcoin_value(height)
 
         def coin_filter(coin):
-            if not coin.is_processed():
+            if coin.is_unconfirmed():
+                return False
+            if coin.is_unprocessed():
                 return True
 
             # FIXME: This often will consume the Vm coin of a fee-reserve, which is our
@@ -500,8 +590,14 @@ class StateMachine:
         feerate = self._feerate_reserve_per_vault(height)
         return int(feerate * P2WPKH_INPUT_SIZE + self._feerate_to_fee(5, "cancel", 0))
 
-    def consolidate_fanout(self, block_height):
-        """Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
+    def broadcast_consolidate_fanout(self, block_height):
+        """
+        FIXME: Instead of removing coins, add them as inputs to a CF Tx. Don't remove any coins
+        if the vault status is "Canceling" (or "Spending"??). Instead of adding coins to the coin_pool,
+        add them as outputs to the CF Tx. Add the CF Tx to the mempool.
+
+
+        Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
         new re-fills that enable accurate feebumping and 2) to consolidate negligible feebump coins
         if the current feerate is "low".
 
@@ -565,7 +661,9 @@ class StateMachine:
 
             num_new_reserves += 1
             for x in target_coin_dist:
-                added_coins.append(self.coin_pool.add_coin(x, fan_block=block_height))
+                added_coins.append(
+                    self.coin_pool.add_coin(x, processing_state=ProcessingState.PENDING)
+                )
 
         if num_new_reserves == 0:
             logging.debug(
@@ -601,20 +699,30 @@ class StateMachine:
                 for _ in range(added_coins_count):
                     added_coins.append(
                         self.coin_pool.add_coin(
-                            added_coin_value, fan_block=block_height
+                            added_coin_value, processing_state=ProcessingState.PENDING
                         )
                     )
                 cf_tx_fee += outputs_fee
-                return cf_tx_fee
+            else:
+                # And fallback to distribute the excess across the created fb coins
+                num_outputs = num_new_reserves * len(target_coin_dist)
+                increase = remainder // num_outputs
+                for coin in added_coins:
+                    coin.increase_amount(increase)
 
-            # And fallback to distribute the excess across the created fb coins
-            num_outputs = num_new_reserves * len(target_coin_dist)
-            increase = remainder // num_outputs
-            for coin in added_coins:
-                coin.increase_amount(increase)
-
+        self.mempool.append(ConsolidateFanoutTx(block_height, coins, added_coins))
         return cf_tx_fee
 
+    def finalize_consolidate_fanout(self, tx, height):
+        """Confirm cosnolidate_fanout tx and update the coin pool."""
+        if self.is_tx_confirmed(tx, height):
+            for coin in tx.txouts:
+                self.coin_pool.confirm_coin(coin, height)
+            self.mempool.remove(tx)
+            return True
+        return False
+
+    # FIXME: cleanup this function..
     def _allocate_0(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
@@ -730,8 +838,14 @@ class StateMachine:
         if self.allocate_version == 0:
             self._allocate_0(vault_id, amount, block_height)
 
-    def process_cancel(self, vault_id, block_height):
-        """The cancel must be updated with a fee (the large Vm allocated to it).
+    def broadcast_cancel(self, vault_id, block_height):
+        """Construct and broadcast the cancel tx.
+
+        FIXME: Instead of removing selected coins, add them as inputs
+        to a cancel tx. Add the cancel tx to the mempool. Set the vault's status
+        to "canceling".
+
+        The cancel must be updated with a fee (the large Vm allocated to it).
         If this fee is unsuccessful at pushing the cancel through, additional small coins may
         be added from the fee_reserve.
         """
@@ -740,6 +854,8 @@ class StateMachine:
         )
         if vault is None:
             raise RuntimeError(f"No vault found with id {vault_id}")
+        # FIXME: i think this doesn't hold
+        assert vault.is_available(), "FIXME"
 
         try:
             init_fee = self._estimate_smart_feerate(block_height)
@@ -792,19 +908,45 @@ class StateMachine:
                 init_fee -= fbcoin.amount
                 cancel_fb_inputs.append(fbcoin)
 
+        vault.set_status(VaultState.CANCELING)
+        assert not vault.is_available()
+        self.mempool.append(CancelTx(block_height, vault.id, self.cancel_vbytes()))
+
         return cancel_fb_inputs
 
-    def finalize_cancel(self, vault_id):
+    def finalize_cancel(self, tx, height):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
         become unallocated. The vault with vault_id is removed from vaults.
         """
-        self.remove_vault(self.vaults[vault_id])
+        if self.is_tx_confirmed(tx, height):
+            self.remove_vault(self.vaults[tx.vault_id])
+            self.mempool.remove(tx)
 
-    def process_spend(self, vault_id):
-        """Once a vault is consumed with a spend, the fee-reserve that was allocated to it
-        becomes un-allocated and the vault is removed from the set of vaults.
+    def spend(self, vault_id, height):
+        """Handle a broadcasted Spend transaction.
+
+        We don't track the confirmation status of the Spend transaction and assume
+        instant confirmation.
+        The model always assume a spend sequence results in a succesful Spend
+        confirmation. Technically we should wait for CSV blocks to remove the
+        vault from the mapping but the approximation is good enough for the data
+        we are interested in (it does not affect the availability of feebump coins).
         """
         self.remove_vault(self.vaults[vault_id])
+
+    def feebump(self, tx):
+        """Uses the inputs in the cancel tx and the remaining coins in the vault's
+        fb_coins to construct a replacement cancel tx.
+        """
+        pass
+
+    def replace_cancel(self, tx):
+        """Broadcasts a replacement cancel transaction. Updates the coin_pool
+        and the associated vault.
+        FIXME: How should inputs that were in the first version of the cancel
+        but not in the replacement be handled?
+        """
+        pass
 
     def risk_status(self, block_height):
         """Return a summary of the risk status for the set of vaults being watched."""
