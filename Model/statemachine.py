@@ -893,14 +893,18 @@ class StateMachine:
             # sort in increasing order of amount
             reserve = sorted(vault.allocated_coins(), key=lambda coin: coin.amount)
             try:
-                fbcoin = next(coin for coin in reserve if coin.amount >= needed_fee)
+                fbcoin = next(
+                    coin
+                    for coin in reserve
+                    if coin.amount - feerate * P2WPKH_INPUT_SIZE >= needed_fee
+                )
                 self.remove_coin(fbcoin)
                 cancel_fb_inputs.append(fbcoin)
                 break
             except (StopIteration):
                 fbcoin = reserve[-1]
                 self.remove_coin(fbcoin)
-                needed_fee -= fbcoin.amount
+                needed_fee -= fbcoin.amount - feerate * P2WPKH_INPUT_SIZE
                 cancel_fb_inputs.append(fbcoin)
 
         vault.set_status(VaultState.CANCELING)
