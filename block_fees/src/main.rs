@@ -1,12 +1,10 @@
-use bitcoin::{blockdata::constants::WITNESS_SCALE_FACTOR, consensus::encode::VarInt};
 use blocks_iterator::Config;
 use chrono::NaiveDateTime;
 use structopt::StructOpt;
 
 use std::{fs, io::Write, process, sync::mpsc::sync_channel};
 
-fn metadata(block: &blocks_iterator::BlockExtra) -> (u64, Vec<u64>, Vec<u64>) {
-    let mut total_weight = 0;
+fn metadata(block: &blocks_iterator::BlockExtra) -> (Vec<u64>, Vec<u64>) {
     let mut fees = Vec::with_capacity(block.block.txdata.len());
     let mut feerates = Vec::with_capacity(block.block.txdata.len());
 
@@ -15,14 +13,12 @@ fn metadata(block: &blocks_iterator::BlockExtra) -> (u64, Vec<u64>, Vec<u64>) {
         if let Some(fee) = block.tx_fee(&tx) {
             let weight = tx.get_weight() as u64;
 
-            total_weight += weight;
-
             fees.push(fee);
             feerates.push(fee / weight);
         }
     }
 
-    (total_weight, fees, feerates)
+    (fees, feerates)
 }
 
 fn mean(collection: &[u64]) -> u64 {
@@ -31,11 +27,6 @@ fn mean(collection: &[u64]) -> u64 {
     } else {
         collection.iter().sum::<u64>() / collection.len() as u64
     }
-}
-
-fn block_weight(txs_weight: u64, n_txs: u64) -> u64 {
-    let base_weight = WITNESS_SCALE_FACTOR * (80 + VarInt(n_txs).len());
-    base_weight as u64 + txs_weight
 }
 
 /// Assumes a sorted slice
@@ -54,7 +45,6 @@ fn main() {
     // compute the fees!
     let mut config = Config::from_args();
     config.skip_prevout = false;
-    let network = config.network;
 
     let (send, recv) = sync_channel(1000);
     let handle = blocks_iterator::iterate(config, send);
@@ -65,19 +55,15 @@ fn main() {
     });
 
     while let Some(block) = recv.recv().unwrap() {
-        let n_txs = block.block.txdata.len() as u64;
-        let (total_weight, mut fees, mut feerates) = metadata(&block);
+        let (mut fees, mut feerates) = metadata(&block);
         fees.sort();
         feerates.sort();
 
         if fees.len() == 0 {
             write!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{}\n",
                 block.height,
-                block.block_hash,
-                block.block.header.difficulty(network),
-                block_weight(total_weight, n_txs),
                 "NA",
                 "NA",
                 "NA",
@@ -95,14 +81,12 @@ fn main() {
         } else {
             write!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{}\n",
                 block.height,
-                block.block_hash,
-                block.block.header.difficulty(network),
-                block_weight(total_weight, n_txs),
                 mean(&fees),
                 median(&fees),
-                fees[0],
+                // For the min fee we assume no more than 5% are paid out of band
+                fees[(fees.len() - 1) / 20],
                 fees[fees.len() - 1],
                 mean(&feerates),
                 median(&feerates),
