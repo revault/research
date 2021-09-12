@@ -21,6 +21,7 @@ from utils import (
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
     TX_OVERHEAD_SIZE,
+    FB_DUST_THRESH,
 )
 
 
@@ -436,6 +437,30 @@ class StateMachine:
                 dist[-1] += excess
             return dist
 
+        # Strategy 2
+        # This is strategy 0 but hacked with results feedback
+        if self.O_version == 2:
+            # We want a large enough Vm coin as a first shot
+            vb = self.Vb(block_height)
+            vm = max(self.Vm(block_height), 2 * vb)
+
+            # Don't create more vb coins than is necessary
+            reserve = self.fee_reserve_per_vault(block_height)
+            vb_count = reserve // vb
+            excess = int(vb * (reserve / vb - vb_count))
+            vm += excess
+
+            # Instead opportunistically create some small Vbs that we can't
+            # rely on under our assumptions (feerate might jump to reserve
+            # at any time and they would become unusable) but are good to
+            # have during low fee periods to avoid overpaying.
+            # This is a tradeoff between increasing the reserve requirements
+            # (we effectively create them in addition to the reserve) and
+            # overpaying too much during low fee periods.
+            small_vbs = [int(max(vb / 4, float(FB_DUST_THRESH))) for _ in range(4)]
+
+            return [vm] + [vb for i in range(vb_count)] + small_vbs
+
     def unallocated_balance(self):
         return sum(
             [
@@ -526,7 +551,7 @@ class StateMachine:
                 if not coin_in_dist(coin.amount, dist, self.I_2_tol):
                     return True
 
-            if low_feerate and self.is_negligible(coin, block_height):
+            if low_feerate and coin.amount < FB_DUST_THRESH:
                 return True
 
             return False
@@ -542,11 +567,8 @@ class StateMachine:
               Cancel tx feerate at the reserve (max) feerate).
             - Unallocated ones ones we would not create, if the current feerate is low.
         """
-        reserve_feerate = self._feerate_reserve_per_vault(height)
-        dust_threshold = reserve_feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(1, 0)
         # FIXME: this should use the next 3 blocks feerate
         low_feerate = self._feerate(height) <= 5
-        min_fbcoin_value = self.min_fbcoin_value(height)
 
         def coin_filter(coin):
             if coin.is_unconfirmed():
@@ -554,12 +576,7 @@ class StateMachine:
             if coin.is_unprocessed():
                 return True
 
-            # FIXME: This often will consume the Vm coin of a fee-reserve, which is our
-            # best estimate, leading to large fee over payments.
-            if coin.amount < dust_threshold:
-                return True
-
-            if low_feerate and coin.amount < min_fbcoin_value:
+            if low_feerate and coin.amount < FB_DUST_THRESH:
                 return True
 
             return False

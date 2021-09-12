@@ -9,6 +9,9 @@ MAX_TX_SIZE = 100_000
 
 BLOCKS_PER_DAY = 144
 
+# Threshold below which we consider a feebump coin should be consolidated.
+FB_DUST_THRESH = 20_000
+
 # A mapping from the number of stakeholders and managers to the Cancel transaction
 # weight. Generated in advance for performance reasons.
 CANCEL_TX_WEIGHT = {
