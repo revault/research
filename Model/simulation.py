@@ -150,8 +150,6 @@ class Simulation(object):
 
         # Expected CF Tx fee
         feerate = self.wt.next_block_feerate(block_height)
-        if feerate is None:
-            feerate = self.wt._feerate(block_height)
         expected_num_outputs = len(self.wt.fb_coins_dist(block_height)) * new_reserves
         # just incase all coins are slected, plus the new refill output
         # FIXME: way too much
@@ -193,8 +191,6 @@ class Simulation(object):
             self.wt.refill(refill_amount)
 
             feerate = self.wt.next_block_feerate(block_height)
-            if feerate is None:
-                feerate = self.wt._feerate(block_height)
             # TODO: 2-in 2-out
             self.refill_fee = 109.5 * feerate
 
@@ -291,8 +287,6 @@ class Simulation(object):
         # Compute overpayments
         if self.with_overpayments:
             feerate = self.wt.next_block_feerate(block_height)
-            if feerate is None:
-                feerate = self.wt._feerate(block_height)
             self.overpayments.append([block_height, self.cancel_fee - feerate])
 
     def catastrophe_sequence(self, block_height):

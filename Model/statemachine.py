@@ -355,10 +355,25 @@ class StateMachine:
         return self.feerate[1]
 
     def next_block_feerate(self, height):
+        """Value of `estimatesmartfee 1 CONSERVATIVE`.
+
+        When estimates aren't available, falls back to the maximum of the last
+        3 block median.
+        """
         try:
             return int(self.hist_df["est_1block"][height])
         except ValueError:
-            return None
+            try:
+                # FIXME: we can do better than that.
+                return int(
+                    max(
+                        self.hist_df["mean_feerate"][h]
+                        for h in range(height - 2, height + 1)
+                    )
+                )
+            except ValueError:
+                # Mean feerate might be NA if there was no tx in this block
+                return 0
 
     def cancel_vbytes(self):
         """Size of the Cancel transaction without any feebump input"""
@@ -375,7 +390,6 @@ class StateMachine:
     def is_tx_confirmed(self, tx, height):
         """We consider a transaction to have been confirmed in this block if its
         feerate was above the min feerate in this block."""
-        # FIXME: this is wrong!! min feerate is always 0 or 1 because sponsored txs!
         min_feerate = self.hist_df["min_feerate"][height]
         min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
         return tx.feerate() > min_feerate
@@ -628,11 +642,8 @@ class StateMachine:
             raise CfError("Unknown algorithm version for coin consolidation")
 
         feerate = self.next_block_feerate(block_height)
-        if feerate is None:
-            feerate = self._feerate(block_height)
 
         # FIXME this doesn't re-create enough coins? If we consolidated some.
-
         added_coins = []
         # Keep track of the CF tx size and fees as we add outputs
         cf_size = cf_tx_size(n_inputs=len(coins), n_outputs=0)
@@ -859,8 +870,6 @@ class StateMachine:
         assert vault.is_available(), "FIXME"
 
         feerate = self.next_block_feerate(block_height)
-        if feerate is None:
-            feerate = self._feerate(block_height)
         needed_fee = self.cancel_tx_fee(feerate, 0)
 
         # Strat 1: randomly select coins until the fee is met
@@ -974,8 +983,6 @@ class StateMachine:
         """
         vault = self.vaults[tx.vault_id]
         new_feerate = self.next_block_feerate(height)
-        if new_feerate is None:
-            new_feerate = self._feerate(height)
 
         logging.debug(
             f"Checking if we need feebump Cancel tx for vault {vault.id}."
