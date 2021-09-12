@@ -4,11 +4,15 @@ import random
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
-from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE
+from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
 from statemachine import StateMachine
 
 
 class AllocationError(Exception):
+    pass
+
+
+class NoVaultToSpend(RuntimeError):
     pass
 
 
@@ -28,7 +32,7 @@ class Simulation(object):
         exp_active_vaults,
         refill_excess,
         refill_period,
-        delegation_period,
+        spend_rate,
         invalid_spend_rate,
         catastrophe_rate,
         with_balance=False,
@@ -47,7 +51,7 @@ class Simulation(object):
         # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
         self.refill_excess = refill_excess
         self.refill_period = refill_period
-        self.delegation_period = delegation_period
+        self.spend_rate = spend_rate
 
         # Manager parameters
         self.invalid_spend_rate = invalid_spend_rate
@@ -101,7 +105,7 @@ class Simulation(object):
         Refill excess: {self.refill_excess}\n\
         Expected active vaults: {self.expected_active_vaults}\n\
         Refill period: {self.refill_period}\n\
-        Delegation period: {self.delegation_period}\n\
+        Spend rate: {self.spend_rate}\n\
         Invalid spend rate: {self.invalid_spend_rate}\n\
         Catastrophe rate: {self.catastrophe_rate}\n\
         """
@@ -235,21 +239,21 @@ class Simulation(object):
 
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
-            self.cf_fee = self.wt.consolidate_fanout(block_height + 1)
+            self.cf_fee = self.wt.consolidate_fanout(block_height)
             logging.debug(
-                f"  Consolidate-fanout transition at block {block_height+1} with fee:"
+                f"  Consolidate-fanout transition at block {block_height} with fee:"
                 f" {self.cf_fee}"
             )
 
             # snapshot coin pool after CF Tx confirmation
             if self.with_coin_pool:
                 amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_cf.append([block_height + 7, amounts])
+                self.pool_after_cf.append([block_height, amounts])
 
             # Top up sequence
             # Top up delegations after confirmation of CF Tx, because consolidating coins
             # can diminish the fee_reserve of a vault
-            self.top_up_sequence(block_height + 7)
+            self.top_up_sequence(block_height)
 
     def _spend_init(self, block_height):
         # Top up sequence
@@ -292,6 +296,9 @@ class Simulation(object):
 
     def spend_sequence(self, block_height):
         logging.debug(f"Spend sequence at block {block_height}")
+        if len(self.wt.list_vaults()) == 0:
+            raise NoVaultToSpend
+
         vaultID = self._spend_init(block_height)
         # Spend transition
         logging.debug(f"  Spend transition at block {block_height}")
@@ -304,6 +311,9 @@ class Simulation(object):
 
     def cancel_sequence(self, block_height):
         logging.debug(f"Cancel sequence at block {block_height}")
+        if len(self.wt.list_vaults()) == 0:
+            raise NoVaultToSpend
+
         vault_id = self._spend_init(block_height)
         # Cancel transition
         cancel_inputs = self.wt.process_cancel(vault_id, block_height)
@@ -327,6 +337,9 @@ class Simulation(object):
             self.overpayments.append([block_height, self.cancel_fee - feerate])
 
     def catastrophe_sequence(self, block_height):
+        if len(self.wt.list_vaults()) == 0:
+            raise NoVaultToSpend
+
         # Topup sequence
         self.top_up_sequence(block_height)
 
@@ -363,32 +376,40 @@ class Simulation(object):
 
         self.initialize_sequence(start_block)
 
+        # For each block in the range, simulate an action affecting the watchtower
+        # (formally described as a sequence of transitions) based on the configured
+        # probabilities and the historical data of the current block.
+        # Then, populate some data at this block for later analysis (see the plot()
+        # method).
         for block in range(start_block, end_block):
             try:
-                # Refill sequence spans 8 blocks, musn't begin another sequence
-                # with period shorter than that.
-                if block % self.refill_period == 0:  # once per refill period
+                # Refill once per refill period
+                if block % self.refill_period == 0:
                     self.refill_sequence(block)
 
-                # Fixme: assumes self.delegation_period > 20
-                if (
-                    block % self.delegation_period == 20
-                ):  # once per delegation period on the 20th block
+                # The spend rate is a rate per day
+                if random.random() < self.spend_rate / BLOCKS_PER_DAY:
                     # generate invalid spend, requires cancel
                     if random.random() < self.invalid_spend_rate:
-                        self.cancel_sequence(block)
-
+                        try:
+                            self.cancel_sequence(block)
+                        except NoVaultToSpend:
+                            logging.debug("Failed to Cancel, no vault to spend")
                     # generate valid spend, requires processing
                     else:
-                        self.spend_sequence(block)
+                        try:
+                            self.spend_sequence(block)
+                        except NoVaultToSpend:
+                            logging.debug("Failed to Spend, no vault to spend")
 
-                if block % 144 == 70:  # once per day on the 70th block
-                    if random.random() < self.catastrophe_rate:
+                # The catastrophe rate is a rate per day
+                if random.random() < self.catastrophe_rate / BLOCKS_PER_DAY:
+                    try:
                         self.catastrophe_sequence(block)
-
-                        # Reboot operation after catastrophe
-                        self.initialize_sequence(block + 10)
-            # Stop simulation, exit loop and report results
+                    except NoVaultToSpend:
+                        logging.debug("Failed to Cancel (catastrophe), no vault to spend")
+                    # Reboot operation after catastrophe
+                    self.initialize_sequence(block)
             except (AllocationError):
                 self.end_block = block
                 logging.error(f"Allocation error at block {block}")
@@ -816,7 +837,6 @@ class Simulation(object):
         if show:
             plt.show()
 
-
 # FIXME: eventually have some small pytests
 if __name__ == "__main__":
 
@@ -833,7 +853,7 @@ if __name__ == "__main__":
         exp_active_vaults=5,
         refill_excess=4 * 5,
         refill_period=1008,
-        delegation_period=144,
+        spend_rate=1,
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
         with_balance=False,

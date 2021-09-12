@@ -19,8 +19,11 @@ ALLOCATE_VERSION = os.getenv("ALLOCATE_VERSION", None)
 EXPECTED_ACTIVE_VAULTS = os.getenv("EXPECTED_ACTIVE_VAULTS", None)
 REFILL_EXCESS = os.getenv("REFILL_EXCESS", None)
 REFILL_PERIOD = os.getenv("REFILL_PERIOD", None)
-DELEGATION_PERIOD = os.getenv("DELEGATION_PERIOD", None)
+# Spend rate per day
+SPEND_RATE = os.getenv("SPEND_RATE", None)
+# Invalid rate per spend
 INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", None)
+# Catastrophe rate per day
 CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", None)
 
 if __name__ == "__main__":
@@ -42,7 +45,7 @@ if __name__ == "__main__":
         EXPECTED_ACTIVE_VAULTS,
         REFILL_EXCESS,
         REFILL_PERIOD,
-        DELEGATION_PERIOD,
+        SPEND_RATE,
         INVALID_SPEND_RATE,
         CATASTROPHE_RATE,
     ]
@@ -67,7 +70,7 @@ if __name__ == "__main__":
         int(EXPECTED_ACTIVE_VAULTS),
         int(REFILL_EXCESS),
         int(REFILL_PERIOD),
-        int(DELEGATION_PERIOD),
+        float(SPEND_RATE),
         float(INVALID_SPEND_RATE),
         float(CATASTROPHE_RATE),
         with_balance=True,
