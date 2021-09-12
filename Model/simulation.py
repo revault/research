@@ -35,6 +35,7 @@ class Simulation(object):
         o_version,
         i_version,
         allocate_version,
+        cancel_coin_selec,
         exp_active_vaults,
         refill_excess,
         refill_period,
@@ -73,6 +74,7 @@ class Simulation(object):
             o_version,
             i_version,
             allocate_version,
+            cancel_coin_selec,
         )
         self.vault_count = 0
         self.vault_id = 0

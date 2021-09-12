@@ -216,6 +216,7 @@ class StateMachine:
         o_version,
         i_version,
         allocate_version,
+        cancel_coin_selec,
     ):
         self.n_stk = n_stk
         self.n_man = n_man
@@ -236,6 +237,7 @@ class StateMachine:
         self.O_version = o_version
         self.I_version = i_version
         self.allocate_version = allocate_version
+        self.cancel_coin_selection = cancel_coin_selec
 
         self.O_0_factor = 7  # num of Vb coins
         self.O_1_factor = 2  # multiplier M
@@ -882,7 +884,18 @@ class StateMachine:
         # if vault['fee_reserve'] == []:
         #     raise RuntimeError(f"Fee reserve for vault {vault['id']} was insufficient to process cancel tx")
 
-        # Strat 3: select smallest coin to cover init_fee, if no coin, remove largest and try again.
+        if self.cancel_coin_selection == 0:
+            cancel_fb_inputs = self.cancel_coin_selec_1(vault, needed_fee, feerate)
+
+        vault.set_status(VaultState.CANCELING)
+        self.mempool.append(CancelTx(block_height, vault.id, self.cancel_vbytes()))
+
+        return cancel_fb_inputs
+
+    def cancel_coin_selec_1(self, vault, needed_fee, feerate):
+        """Select smallest coin to cover init_fee, if no coin, remove largest and try again."""
+        coins = []
+
         while needed_fee > 0:
             if vault.allocated_coins() == []:
                 raise RuntimeError(
@@ -899,19 +912,15 @@ class StateMachine:
                     if coin.amount - feerate * P2WPKH_INPUT_SIZE >= needed_fee
                 )
                 self.remove_coin(fbcoin)
-                cancel_fb_inputs.append(fbcoin)
+                coins.append(fbcoin)
                 break
             except (StopIteration):
                 fbcoin = reserve[-1]
                 self.remove_coin(fbcoin)
                 needed_fee -= fbcoin.amount - feerate * P2WPKH_INPUT_SIZE
-                cancel_fb_inputs.append(fbcoin)
+                coins.append(fbcoin)
 
-        vault.set_status(VaultState.CANCELING)
-        assert not vault.is_available()
-        self.mempool.append(CancelTx(block_height, vault.id, self.cancel_vbytes()))
-
-        return cancel_fb_inputs
+        return coins
 
     def finalize_cancel(self, tx, height):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
