@@ -468,7 +468,7 @@ class Simulation(object):
                 self._reserve_divergence(block)
 
             if self.with_fb_coins_dist:
-                if block % 1000 == 0:
+                if block % 10_000 == 0:
                     self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
                 self.vm_values.append([block, self.wt.Vm(block)])
 
