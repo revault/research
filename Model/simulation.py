@@ -102,6 +102,7 @@ class Simulation(object):
         self.with_fb_coins_dist = with_fb_coins_dist
         self.fb_coins_dist = []
         self.vm_values = []
+        self.vb_values = []
 
         # Simulation report
         self.report_init = f"""\
@@ -471,6 +472,7 @@ class Simulation(object):
                 if block % 10_000 == 0:
                     self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
                 self.vm_values.append([block, self.wt.Vm(block)])
+                self.vb_values.append([block, self.wt.Vb(block)])
 
     def plot(self, output=None, show=False):
         """Plot info about the simulation stored according to configuration.
@@ -790,6 +792,11 @@ class Simulation(object):
                 df.set_index("Block", inplace=True)
                 df.plot(ax=axes[plot_num], legend=True)
                 axes[plot_num].legend(["$V_m$"])
+            if self.vb_values != []:
+                df = DataFrame(self.vb_values, columns=["Block", "Vb"])
+                df.set_index("Block", inplace=True)
+                df.plot(ax=axes[plot_num], legend=True)
+                axes[plot_num].legend(["$V_b$"])
 
             plot_num += 1
 
