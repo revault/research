@@ -784,11 +784,26 @@ class Simulation(object):
     def plot_fee_history(self, start_block, end_block, output=None, show=False):
 
         plt.style.use(["plot_style.txt"])
-        fig = self.wt.hist_df["mean_feerate"][start_block:end_block].plot()
-        plt.title("Feerate History")
-        plt.xlabel("Block", labelpad=15)
-        plt.ylabel("Feerate (sats/vByte)", labelpad=15)
-        fig.size = 3, 7
+        subplots_len = 3
+        fig, axes = plt.subplots(
+            subplots_len, 1, sharex=True, figsize=(5.4, subplots_len * 3.9)
+        )
+        self.wt.hist_df["mean_feerate"][start_block:end_block].plot(ax=axes[0])
+        self.wt.hist_df["min_feerate"][start_block:end_block].plot(
+            ax=axes[1], legend=True
+        )
+        self.wt.hist_df["max_feerate"][start_block:end_block].plot(
+            ax=axes[2], legend=True
+        )
+        axes[0].set_title("Mean Fee Rate")
+        axes[0].set_ylabel("Satoshis", labelpad=15)
+        axes[0].set_xlabel("Block", labelpad=15)
+        axes[1].set_title("Min Fee Rate")
+        axes[1].set_ylabel("Satoshis", labelpad=15)
+        axes[1].set_xlabel("Block", labelpad=15)
+        axes[2].set_title("Max Fee Rate")
+        axes[2].set_ylabel("Satoshis", labelpad=15)
+        axes[2].set_xlabel("Block", labelpad=15)
 
         if output is not None:
             plt.savefig(f"{output}.png")
@@ -824,7 +839,7 @@ if __name__ == "__main__":
     sim = Simulation(
         n_stk=5,
         n_man=5,
-        hist_feerate_csv="historical_fees.csv",
+        hist_feerate_csv="../block_fees/historical_fees.csv",
         reserve_strat="CUMMAX95Q90",
         estimate_strat="ME30",
         o_version=1,
@@ -852,6 +867,5 @@ if __name__ == "__main__":
     end_block = 680000
 
     sim.run(start_block, end_block)
-
-    # sim.plot_frpv(start_block, end_block, show=True)
+    sim.plot_frpv(start_block, end_block, show=True)
     # sim.plot_fee_history(start_block, end_block, show=True)
