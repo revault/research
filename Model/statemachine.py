@@ -8,6 +8,7 @@ TODO:
     - could break with certain DELEGATION_PERIODs. 
 """
 
+import itertools
 import logging
 import numpy as np
 from copy import deepcopy
@@ -885,6 +886,8 @@ class StateMachine:
         #     raise RuntimeError(f"Fee reserve for vault {vault['id']} was insufficient to process cancel tx")
 
         if self.cancel_coin_selection == 0:
+            cancel_fb_inputs = self.cancel_coin_selec_0(vault, needed_fee, feerate)
+        elif self.cancel_coin_selection == 1:
             cancel_fb_inputs = self.cancel_coin_selec_1(vault, needed_fee, feerate)
 
         vault.set_status(VaultState.CANCELING)
@@ -892,7 +895,7 @@ class StateMachine:
 
         return cancel_fb_inputs
 
-    def cancel_coin_selec_1(self, vault, needed_fee, feerate):
+    def cancel_coin_selec_0(self, vault, needed_fee, feerate):
         """Select smallest coin to cover init_fee, if no coin, remove largest and try again."""
         coins = []
 
@@ -919,6 +922,34 @@ class StateMachine:
                 self.remove_coin(fbcoin)
                 needed_fee -= fbcoin.amount - feerate * P2WPKH_INPUT_SIZE
                 coins.append(fbcoin)
+
+        return coins
+
+    def cancel_coin_selec_1(self, vault, needed_fee, feerate):
+        """Select the combination that results in the smallest overpayment"""
+        coins = []
+
+        best_combination = None
+        min_fee_added = None
+        allocated_coins = vault.allocated_coins()
+        for candidate in itertools.chain.from_iterable(
+            itertools.combinations(allocated_coins, r)
+            for r in range(1, len(allocated_coins) + 1)
+        ):
+            added_fees = sum(
+                [c.amount - P2WPKH_INPUT_SIZE * feerate for c in candidate]
+            )
+            if added_fees < needed_fee:
+                continue
+            if min_fee_added is not None and added_fees >= min_fee_added:
+                continue
+            best_combination = candidate
+            min_fee_added = added_fees
+
+        assert best_combination is not None
+        for coin in best_combination:
+            self.remove_coin(coin)
+            coins.append(coin)
 
         return coins
 
