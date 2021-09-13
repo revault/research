@@ -776,6 +776,8 @@ class StateMachine:
 
         Vm = self.Vm(block_height)
         logging.debug(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
+        # Note this check is lax: we may have more unallocated than the required reserve
+        # but still not have enough accounting for the fbcoin input fees.
         if required_reserve > total_unallocated:
             self.coin_pool = coin_pool_copy
             self.vaults = vaults_copy
@@ -816,15 +818,28 @@ class StateMachine:
 
             # FIXME: this implicitly assumes 1.3*Vm < required_reserve
             diff = required_reserve - vault.reserve_balance()
-            if diff < 0:
+            if diff <= 0:
                 break
+            # Now, the values in dist did take into account the coin input fee.
+            # If we are looking on our own outside of the dist we need to account for
+            # it too.
+            reserve_feerate = self._feerate_reserve_per_vault(block_height)
+            fbcoin_cost = int(reserve_feerate * P2WPKH_INPUT_SIZE)
             # Now handle the remaining requirement, diff
-            available = [coin for coin in self.coin_pool.unallocated_coins()]
+            available = [
+                coin
+                for coin in self.coin_pool.unallocated_coins()
+                if coin.amount > fbcoin_cost
+            ]
+            if diff > sum(c.amount - fbcoin_cost for c in available):
+                self.coin_pool = coin_pool_copy
+                self.vaults = vaults_copy
+                raise AllocationError(required_reserve, total_unallocated)
             # sort in increasing order of amount
             available = sorted(available, key=lambda coin: coin.amount)
             # Try to fill the remaining requirement with smallest available coin that covers the diff
             try:
-                fbcoin = next(coin for coin in available if coin.amount >= diff)
+                fbcoin = next(coin for coin in available if coin.amount - fbcoin_cost >= diff)
                 self.coin_pool.allocate_coin(fbcoin, vault)
                 vault.allocate_coin(fbcoin)
                 logging.debug(
