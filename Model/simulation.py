@@ -9,14 +9,16 @@ import random
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
-from statemachine import StateMachine, AllocationError
+from statemachine import StateMachine, AllocationError, ProcessingState
 from transactions import ConsolidateFanoutTx, CancelTx
 from utils import (
     cf_tx_size,
     P2WPKH_INPUT_SIZE,
     P2WPKH_OUTPUT_SIZE,
+    TX_OVERHEAD_SIZE,
     BLOCKS_PER_DAY,
     REFILL_TX_SIZE,
+    MAX_TX_SIZE,
 )
 
 
@@ -350,8 +352,16 @@ class Simulation(object):
         """
         for tx in self.wt.unconfirmed_transactions():
             if isinstance(tx, ConsolidateFanoutTx):
+                assert (
+                    len(tx.txins) * P2WPKH_INPUT_SIZE
+                    + len(tx.txouts) * P2WPKH_OUTPUT_SIZE
+                    + TX_OVERHEAD_SIZE
+                    < MAX_TX_SIZE
+                )
                 self.wt.finalize_consolidate_fanout(tx, height)
                 self.top_up_sequence(height)
+                if tx.txouts[-1].processing_state == ProcessingState.UNPROCESSED:
+                    self.wt.broadcast_consolidate_fanout(height)
             elif isinstance(tx, CancelTx):
                 self.wt.finalize_cancel(tx, height)
             else:
