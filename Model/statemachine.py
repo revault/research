@@ -805,7 +805,6 @@ class StateMachine:
             return True
         return False
 
-    # FIXME: cleanup this function..
     def _allocate_0(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
@@ -813,6 +812,8 @@ class StateMachine:
         dist_req = self.coins_dist_reserve(block_height)
         dist_bonus = self.coins_dist_bonus(block_height)
         min_coin_value = self.min_fbcoin_value(block_height)
+        # If the vault exists and is under reserve, don't remove it immediately
+        # to make sure we won't fail after modifying the internal state.
         remove_vault = False
 
         # If vault already exists and is under requirement, de-allocate its current fee
@@ -844,7 +845,6 @@ class StateMachine:
         ]
         total_usable = sum(usable)
         required_reserve = sum(dist_req)
-
         logging.debug(
             f"    Fee Reserve per Vault: {required_reserve}, "
             f"Usable unallocated coins amounts: {usable} "
@@ -857,10 +857,11 @@ class StateMachine:
         # NOTE: from now on we MUST NOT fail (or crash the program if we do as
         # we won't recover from the modified state).
 
-        vault = Vault(vault_id, amount)
-        tolerances = [0.05, 0.1, 0.2, 0.3]
+        self.vaults[vault_id] = Vault(vault_id, amount)
+        vault = self.vaults[vault_id]
         # First optimistically search for coins in the required reserve with
         # small tolerance.
+        tolerances = [0.05, 0.1, 0.2, 0.3]
         for tol in tolerances:
             not_found = []
             for x in dist_req:
@@ -873,7 +874,7 @@ class StateMachine:
                     self.allocate_coin(fbcoin, vault)
                     logging.debug(
                         f"    {fbcoin} found with tolerance {tol*100}%, added to"
-                        " fee reserve"
+                        " fee reserve. Distribution value: {x}"
                     )
                 except (StopIteration):
                     logging.debug(
@@ -890,7 +891,7 @@ class StateMachine:
                 break
 
         # If we couldn't find large enough coins close to the dist, complete
-        # with coins off the dist  but make sure they increase the fee at the
+        # with coins off the dist but make sure they increase the fee at the
         # worst case feerate.
         for coin in self.coin_pool.unallocated_coins():
             if coin.amount >= min_coin_value:
@@ -915,8 +916,6 @@ class StateMachine:
             f"    Reserve for vault {vault.id} has excess of"
             f" {vault.reserve_balance() - required_reserve}"
         )
-        # Successful new delegation and allocation!
-        self.vaults[vault.id] = vault
 
     def allocate(self, vault_id, amount, block_height):
         if self.allocate_version == 0:
