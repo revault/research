@@ -87,7 +87,7 @@ if __name__ == "__main__":
         with_overpayments=True,
     )
 
-    start_block = 200000
+    start_block = 350000
     end_block = 681000
 
     if PROFILE_FILENAME is not None:

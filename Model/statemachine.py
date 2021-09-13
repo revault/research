@@ -114,7 +114,7 @@ class FeebumpCoin:
         self.fan_block = fan_block
 
     def __repr__(self):
-        return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block})"
+        return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block}, state={self.processing_state})"
 
     def is_confirmed(self):
         """Whether this coin was fanned out and confirmed"""
@@ -708,16 +708,24 @@ class StateMachine:
         consumed = 0
         while True:
             # First do the reserve
-            consumed += dist_rese_cost
-            if consumed > total_to_consume:
+            if consumed + dist_rese_cost > total_to_consume:
                 break
             # Don't create a new set of outputs if we can't pay the fees for it
-            if total_to_consume - consumed <= cf_tx_fee:
+            if total_to_consume - consumed - dist_rese_cost <= cf_tx_fee:
                 break
+            # Don't create a too large tx, instead add a change output (always
+            # smaller than dist_rese_size) to be processed by a latter CF tx.
+            if cf_size + dist_rese_size > MAX_TX_SIZE:
+                added_coins.append(
+                    self.coin_pool.add_coin(
+                        total_to_consume - consumed,
+                        processing_state=ProcessingState.UNPROCESSED,
+                    )
+                )
+                break
+            consumed += dist_rese_cost
             cf_size += dist_rese_size
             cf_tx_fee += int(dist_rese_size * feerate)
-            if cf_size > MAX_TX_SIZE:
-                raise CfError("The consolidate_fanout transaction is too large!")
 
             num_new_reserves += 1
             for x in dist_reserve:
@@ -726,16 +734,24 @@ class StateMachine:
                 )
 
             # Then if we still have enough do the bonus
-            consumed += dist_bonu_cost
-            if consumed > total_to_consume:
+            if consumed + dist_bonu_cost > total_to_consume:
                 continue
             # Don't create a new set of outputs if we can't pay the fees for it
-            if total_to_consume - consumed <= cf_tx_fee:
+            if total_to_consume - consumed - dist_bonu_cost <= cf_tx_fee:
                 break
+            # Don't create a too large tx, instead add a change output (always
+            # smaller than dist_rese_size) to be processed by a latter CF tx.
+            if cf_size + dist_bonu_size > MAX_TX_SIZE:
+                added_coins.append(
+                    self.coin_pool.add_coin(
+                        total_to_consume - consumed,
+                        processing_state=ProcessingState.UNPROCESSED,
+                    )
+                )
+                break
+            consumed += dist_bonu_cost
             cf_size += dist_bonu_size
             cf_tx_fee += int(dist_bonu_size * feerate)
-            if cf_size > MAX_TX_SIZE:
-                raise CfError("The consolidate_fanout transaction is too large!")
 
             num_new_bonuses += 1
             for x in dist_bonus:
@@ -752,45 +768,56 @@ class StateMachine:
             # return 0 (as in, 0 fee paid)
             return 0
 
-        remainder = (
-            total_to_consume
-            - (num_new_reserves * sum(dist_reserve))
-            - (num_new_bonuses * sum(dist_bonus))
+        # If a change output was appended to the outputs, it contains the
+        # remainder.
+        contains_change = (
+            added_coins[-1].processing_state == ProcessingState.UNPROCESSED
         )
-        assert isinstance(remainder, int)
-        assert (
-            remainder >= cf_tx_fee
-        ), "We must never try to create more fb coins than we can afford to"
+        if not contains_change:
+            remainder = (
+                total_to_consume
+                - (num_new_reserves * sum(dist_reserve))
+                - (num_new_bonuses * sum(dist_bonus))
+            )
+            assert isinstance(remainder, int)
+            assert (
+                remainder >= cf_tx_fee
+            ), "We must never try to create more fb coins than we can afford to"
 
-        # If we have more than we need for the CF fee..
-        remainder -= cf_tx_fee
-        if remainder > 0:
-            # .. First try to opportunistically add more fb coins
-            added_coin_value = int(self.min_acceptable_fbcoin_value(block_height) * 1.3)
-            output_fee = int(P2WPKH_OUTPUT_SIZE * feerate)
-            # The number of coins this large we can add
-            added_coins_count = remainder / (added_coin_value + output_fee)
-            if added_coins_count >= 1:
-                # For a bias toward a lower number of larger outputs, truncate
-                # the number of coins added and add the excess value to the outputs
-                added_coins_count = int(added_coins_count)
-                outputs_fee = added_coin_value + output_fee * added_coins_count
-                added_coin_value = int((remainder - outputs_fee) / added_coins_count)
-                for _ in range(added_coins_count):
-                    added_coins.append(
-                        self.coin_pool.add_coin(
-                            added_coin_value, processing_state=ProcessingState.PENDING
-                        )
+            # If we have more than we need for the CF fee..
+            remainder -= cf_tx_fee
+            if remainder > 0:
+                # .. First try to opportunistically add more fb coins
+                added_coin_value = int(
+                    self.min_acceptable_fbcoin_value(block_height) * 1.3
+                )
+                output_fee = int(P2WPKH_OUTPUT_SIZE * feerate)
+                # The number of coins this large we can add
+                added_coins_count = remainder / (added_coin_value + output_fee)
+                if added_coins_count >= 1:
+                    # For a bias toward a lower number of larger outputs, truncate
+                    # the number of coins added and add the excess value to the outputs
+                    added_coins_count = int(added_coins_count)
+                    outputs_fee = added_coin_value + output_fee * added_coins_count
+                    added_coin_value = int(
+                        (remainder - outputs_fee) / added_coins_count
                     )
-                cf_tx_fee += outputs_fee
-            else:
-                # And fallback to distribute the excess across the created fb coins
-                num_outputs = num_new_reserves * len(
-                    dist_reserve
-                ) + num_new_bonuses * len(dist_bonus)
-                increase = remainder // num_outputs
-                for coin in added_coins:
-                    coin.increase_amount(increase)
+                    for _ in range(added_coins_count):
+                        added_coins.append(
+                            self.coin_pool.add_coin(
+                                added_coin_value,
+                                processing_state=ProcessingState.PENDING,
+                            )
+                        )
+                    cf_tx_fee += outputs_fee
+                else:
+                    # And fallback to distribute the excess across the created fb coins
+                    num_outputs = num_new_reserves * len(
+                        dist_reserve
+                    ) + num_new_bonuses * len(dist_bonus)
+                    increase = remainder // num_outputs
+                    for coin in added_coins:
+                        coin.increase_amount(increase)
 
         self.remove_coins(coins)
         self.mempool.append(ConsolidateFanoutTx(block_height, coins, added_coins))
@@ -800,7 +827,8 @@ class StateMachine:
         """Confirm cosnolidate_fanout tx and update the coin pool."""
         if self.is_tx_confirmed(tx, height):
             for coin in tx.txouts:
-                self.coin_pool.confirm_coin(coin, height)
+                if coin.is_unconfirmed():
+                    self.coin_pool.confirm_coin(coin, height)
             self.mempool.remove(tx)
             return True
         return False
