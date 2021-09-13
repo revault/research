@@ -869,7 +869,7 @@ class StateMachine:
                     fbcoin = next(
                         coin
                         for coin in self.coin_pool.unallocated_coins()
-                        if ((1 - tol) * x <= coin.amount <= (1 + tol) * x)
+                        if ((1 - tol / 2) * x <= coin.amount <= (1 + tol) * x)
                     )
                     self.allocate_coin(fbcoin, vault)
                     logging.debug(
@@ -908,7 +908,7 @@ class StateMachine:
         # coins in the bonus reserve
         for x in dist_bonus:
             for coin in self.coin_pool.unallocated_coins():
-                if x * 0.85 <= coin.amount <= x * 1.15:
+                if x * 0.7 <= coin.amount <= x * 1.3:
                     self.allocate_coin(coin, vault)
                     break
 
