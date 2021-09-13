@@ -783,13 +783,12 @@ class Simulation(object):
             if self.vm_values != []:
                 df = DataFrame(self.vm_values, columns=["Block", "Vm"])
                 df.set_index("Block", inplace=True)
-                df.plot(ax=axes[plot_num], legend=True)
-                axes[plot_num].legend(["$V_m$"])
+                df.plot(ax=axes[plot_num], legend=True, color="red")
             if self.vb_values != []:
                 df = DataFrame(self.vb_values, columns=["Block", "Vb"])
                 df.set_index("Block", inplace=True)
-                df.plot(ax=axes[plot_num], legend=True)
-                axes[plot_num].legend(["$V_b$"])
+                df.plot(ax=axes[plot_num], legend=True, color="blue")
+            axes[plot_num].legend(["$V_m$", "$V_b$"], loc="lower left")
 
             plot_num += 1
 
