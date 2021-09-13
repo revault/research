@@ -550,10 +550,21 @@ class StateMachine:
         This version grabs all the coins that either haven't been processed yet
         or are negligible.
         """
-        return self.grab_coins(
-            lambda coin: not coin.is_unconfirmed()
-            and (coin.is_unprocessed() or self.is_negligible(coin, block_height))
-        )
+
+        def coin_filter(coin):
+            if coin.is_unconfirmed():
+                return False
+
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
+
+            return coin.is_unprocessed() or self.is_negligible(coin, block_height)
+
+        return self.grab_coins(coin_filter)
 
     def grab_coins_2(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -578,6 +589,12 @@ class StateMachine:
                 return False
             if coin.is_unprocessed():
                 return True
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
 
             if not self.coin_pool.is_allocated(coin):
                 if not coin_in_dist(coin.amount, dist, self.I_2_tol):
@@ -606,6 +623,12 @@ class StateMachine:
                 return False
             if coin.is_unprocessed():
                 return True
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
 
             if coin.amount < dust:
                 return True
@@ -638,11 +661,6 @@ class StateMachine:
     # of allocation failures.
     def broadcast_consolidate_fanout(self, block_height):
         """
-        FIXME: Instead of removing coins, add them as inputs to a CF Tx. Don't remove any coins
-        if the vault status is "Canceling" (or "Spending"??). Instead of adding coins to the coin_pool,
-        add them as outputs to the CF Tx. Add the CF Tx to the mempool.
-
-
         Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
         new re-fills that enable accurate feebumping and 2) to consolidate negligible feebump coins
         if the current feerate is "low".
