@@ -11,7 +11,13 @@ import numpy as np
 from pandas import DataFrame
 from statemachine import StateMachine, AllocationError
 from transactions import ConsolidateFanoutTx, CancelTx
-from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY, REFILL_TX_SIZE
+from utils import (
+    cf_tx_size,
+    P2WPKH_INPUT_SIZE,
+    P2WPKH_OUTPUT_SIZE,
+    BLOCKS_PER_DAY,
+    REFILL_TX_SIZE,
+)
 
 
 class NoVaultToSpend(RuntimeError):
@@ -118,8 +124,23 @@ class Simulation(object):
         Invalid spend rate: {self.invalid_spend_rate}\n\
         Catastrophe rate: {self.catastrophe_rate}\n\
         """
-        self.max_cancel_conf_time = 0
-        self.max_cf_conf_time = 0
+        self.report_df = DataFrame(
+            columns=[
+                "cum_ops_cost",
+                "cum_cancel_fee",
+                "cum_cf_fee",
+                "cum_refill_fee",
+                "time_at_risk",
+                "mean_recovery_time",
+                "median_recovery_time",
+                "max_recovery_time",
+                "delegation_failure_count",
+                "delegation_failure_rate",
+                "max_cancel_conf_time",
+                "max_cf_conf_time",
+            ],
+            index=[0],
+        )
 
     def new_vault_id(self):
         self.vault_id += 1
@@ -367,7 +388,9 @@ class Simulation(object):
                 try:
                     self.wt.allocate(self.new_vault_id(), amount, block)
                 except AllocationError as e:
-                    logging.error(f"Not enough funds to allocate all the expected vaults: {str(e)}")
+                    logging.error(
+                        f"Not enough funds to allocate all the expected vaults: {str(e)}"
+                    )
                     # FIXME: should we break?
                     break
                 self.vault_count += 1
@@ -468,8 +491,9 @@ class Simulation(object):
             if self.wt.mempool != []:
                 for tx in self.wt.mempool:
                     if isinstance(tx, CancelTx):
-                        self.max_cancel_conf_time = max(
-                            self.max_cancel_conf_time, block - tx.broadcast_height
+                        self.report_df["max_cancel_conf_time"][0] = max(
+                            self.report_df["max_cancel_conf_time"][0],
+                            block - tx.broadcast_height,
                         )
                         if block - tx.broadcast_height >= self.wt.locktime:
                             logging.debug(
@@ -484,8 +508,9 @@ class Simulation(object):
                                 )
                             )
                     if isinstance(tx, ConsolidateFanoutTx):
-                        self.max_cf_conf_time = max(
-                            self.max_cancel_conf_time, block - tx.broadcast_height
+                        self.report_df["max_cf_conf_time"][0] = max(
+                            self.report_df["max_cf_conf_time"][0],
+                            block - tx.broadcast_height,
                         )
 
     def plot(self, output=None, show=False):
@@ -582,22 +607,25 @@ class Simulation(object):
             axes[plot_num].set_title("Cumulative Operating Costs")
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
-            report += (
-                "Total cumulative cancel fee cost:"
-                f" {cumulative_costs_df['Cancel Fee'].iloc[-1]}\n"
+            self.report_df["cum_cancel_fee"][0] = cumulative_costs_df[
+                "Cancel Fee"
+            ].iloc[-1]
+            self.report_df["cum_cf_fee"][0] = cumulative_costs_df["CF Fee"].iloc[-1]
+            self.report_df["cum_refill_fee"][0] = cumulative_costs_df[
+                "Refill Fee"
+            ].iloc[-1]
+            self.report_df["cum_ops_cost"][0] = (
+                self.report_df["cum_refill_fee"][0]
+                + self.report_df["cum_cf_fee"][0]
+                + self.report_df["cum_cancel_fee"][0]
             )
+            report += f"Total cumulative cancel fee cost: {self.report_df['cum_cancel_fee'][0]}\n"
             report += (
                 "Total cumulative consolidate-fanout fee cost:"
-                f" {cumulative_costs_df['CF Fee'].iloc[-1]}\n"
+                f" {self.report_df['cum_cf_fee'][0]}\n"
             )
-            report += (
-                "Total cumulative refill fee cost:"
-                f" {cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
-            )
-            report += (
-                "Total cumulative cost:"
-                f" {cumulative_costs_df['Cancel Fee'].iloc[-1]+cumulative_costs_df['CF Fee'].iloc[-1]+cumulative_costs_df['Refill Fee'].iloc[-1]}\n"
-            )
+            report += f"Total cumulative refill fee cost: {self.report_df['cum_refill_fee'][0]}\n"
+            report += f"Total cumulative cost: {self.report_df['cum_ops_cost'][0]}\n"
 
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve
@@ -609,15 +637,25 @@ class Simulation(object):
             for (risk_on, risk_off) in self.wt_risk_time:
                 risk_time += risk_off - risk_on
             report += f"Total time at risk: {risk_time} blocks\n"
+            self.report_df["time_at_risk"][0] = risk_time
 
             # What about avg recovery time?
             recovery_times = []
             for (risk_on, risk_off) in self.wt_risk_time:
                 recovery_times.append(risk_off - risk_on)
             if recovery_times != []:
-                report += f"Mean recovery time: {np.mean(recovery_times)} blocks\n"
-                report += f"Median recovery time: {np.median(recovery_times)} blocks\n"
-                report += f"Max recovery time: {max(recovery_times)} blocks\n"
+                self.report_df["mean_recovery_time"][0] = np.mean(recovery_times)
+                report += (
+                    f"Mean recovery time: {self.report_df['mean_recovery_time'][0]}"
+                    " blocks\n"
+                )
+                self.report_df["median_recovery_time"][0] = np.median(recovery_times)
+                report += (
+                    f"Median recovery time: {self.report_df['median_recovery_time'][0]}"
+                    " blocks\n"
+                )
+                self.report_df["max_recovery_time"][0] = max(recovery_times)
+                report += f"Max recovery time: {self.report_df['max_recovery_time'][0]} blocks\n"
 
             plot_num += 1
 
@@ -814,10 +852,8 @@ class Simulation(object):
             plot_num += 1
 
         # Report confirmation tracking
-        report += (
-            f"Max confirmation time for a Cancel Tx: {self.max_cancel_conf_time}\n"
-        )
-        report += f"Max confirmation time for a Consolidate-fanout Tx: {self.max_cf_conf_time}\n"
+        report += f"Max confirmation time for a Cancel Tx: {self.report_df['max_cancel_conf_time'][0]}\n"
+        report += f"Max confirmation time for a Consolidate-fanout Tx: {self.report_df['max_cf_conf_time'][0]}\n"
 
         if output is not None:
             plt.savefig(f"{output}.png")
@@ -825,13 +861,17 @@ class Simulation(object):
         if show:
             plt.show()
 
+        self.report_df["delegation_failure_count"][0] = self.delegation_failures
+        self.report_df["delegation_failure_rate"][0] = (
+            self.delegation_failures / self.delegation_successes
+        )
         report += (
             f"Delegation failures: {self.delegation_failures} /"
             f" {self.delegation_successes}"
             f" ({self.delegation_failures / self.delegation_successes * 100}%)\n"
         )
 
-        return report
+        return (report, self.report_df)
 
     def plot_fee_history(self, start_block, end_block, output=None, show=False):
 

@@ -102,7 +102,7 @@ if __name__ == "__main__":
     else:
         sim.run(start_block, end_block)
 
-        report = sim.plot(PLOT_FILENAME, True)
+        report = sim.plot(PLOT_FILENAME, True)[0]
         logging.info(f"Report\n{report}")
 
         if REPORT_FILENAME is not None:
