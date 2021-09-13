@@ -154,9 +154,8 @@ class Simulation(object):
         # Expected CF Tx fee
         feerate = self.wt.next_block_feerate(block_height)
         expected_num_outputs = len(self.wt.fb_coins_dist(block_height)) * new_reserves
-        # just incase all coins are slected, plus the new refill output
-        # FIXME: way too much
-        expected_num_inputs = self.wt.coin_pool.n_coins() + 1
+        # FIXME: it's likely too much, how to find a good (conservative) estimate for it?
+        expected_num_inputs = self.wt.coin_pool.n_coins() / 2 + 1
         expected_cf_fee = (
             cf_tx_size(expected_num_inputs, expected_num_outputs) * feerate
         )
