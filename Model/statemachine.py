@@ -1058,12 +1058,16 @@ class StateMachine:
             min_fee = tx.fee + self.cancel_tx_fee(2, len(tx.fbcoins))
             needed_fee = max(new_fee, min_fee)
 
-            # Unreserve the previous feebump coins and remove the previous tx
+            # Add the feebump coins back to the pool and remove the previous tx
             for coin in tx.fbcoins:
-                self.coin_pool.add_coin(
-                    coin.amount, coin.processing_state, coin.fan_block, vault.id
+                coin = self.coin_pool.add_coin(
+                    coin.amount,
+                    coin.processing_state,
+                    coin.fan_block,
+                    vault.id,
+                    coin_id=coin.id,
                 )
-                self.allocate_coin(coin, vault)
+                vault.allocate_coin(coin)
             self.mempool.remove(tx)
 
             # Push a new tx with coins selected to meet the new fee
@@ -1071,6 +1075,14 @@ class StateMachine:
                 coins = self.cancel_coin_selec_0(vault, needed_fee, new_feerate)
             elif self.cancel_coin_selection == 1:
                 coins = self.cancel_coin_selec_1(vault, needed_fee, new_feerate)
+
+            # Deallocate the coins from the first tx that were not chosen in
+            # the bump tx.
+            for coin in tx.fbcoins:
+                if coin not in coins:
+                    vault.deallocate_coin(coin)
+                    self.coin_pool.deallocate_coin(coin)
+
             self.mempool.append(CancelTx(height, vault.id, self.cancel_vbytes(), coins))
 
     def spend(self, vault_id, height):
