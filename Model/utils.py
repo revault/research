@@ -12,6 +12,10 @@ BLOCKS_PER_DAY = 144
 # Threshold below which we consider a feebump coin should be consolidated.
 FB_DUST_THRESH = 20_000
 
+# Refill transaction is assumed to be a 2-ins (native segwits) 2-outs (native
+# segwit) transaction
+REFILL_TX_SIZE = 2 * (P2WPKH_INPUT_SIZE + P2WPKH_OUTPUT_SIZE) + TX_OVERHEAD_SIZE
+
 # A mapping from the number of stakeholders and managers to the Cancel transaction
 # weight. Generated in advance for performance reasons.
 CANCEL_TX_WEIGHT = {
