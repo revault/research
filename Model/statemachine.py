@@ -925,21 +925,16 @@ class StateMachine:
     def broadcast_cancel(self, vault_id, block_height):
         """Construct and broadcast the cancel tx.
 
-        FIXME: Instead of removing selected coins, add them as inputs
-        to a cancel tx. Add the cancel tx to the mempool. Set the vault's status
-        to "canceling".
-
         The cancel must be updated with a fee (the large Vm allocated to it).
         If this fee is unsuccessful at pushing the cancel through, additional small coins may
         be added from the fee_reserve.
         """
         vault = self.vaults[vault_id]
-        # FIXME: i think this doesn't hold
-        assert vault.is_available(), "FIXME"
 
         feerate = self.next_block_feerate(block_height)
         needed_fee = self.cancel_tx_fee(feerate, 0)
 
+        # FIXME: should we dropt that??
         # Strat 1: randomly select coins until the fee is met
         # Performs moderately bad in low-stable fee market and ok in volatile fee market
         # while init_fee > 0:
