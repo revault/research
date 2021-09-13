@@ -11,7 +11,7 @@ import numpy as np
 from pandas import DataFrame
 from statemachine import StateMachine, AllocationError
 from transactions import ConsolidateFanoutTx, CancelTx
-from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
+from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY, REFILL_TX_SIZE
 
 
 class NoVaultToSpend(RuntimeError):
@@ -193,8 +193,7 @@ class Simulation(object):
             self.wt.refill(refill_amount)
 
             feerate = self.wt.next_block_feerate(block_height)
-            # TODO: 2-in 2-out
-            self.refill_fee = 109.5 * feerate
+            self.refill_fee = REFILL_TX_SIZE * feerate
 
             # snapshot coin pool after refill confirmation
             if self.with_coin_pool:
