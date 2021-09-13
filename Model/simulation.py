@@ -885,6 +885,33 @@ class Simulation(object):
         if show:
             plt.show()
 
+    def plot_fee_estimate(
+        self, comp_strat, start_block, end_block, output=None, show=False
+    ):
+        plt.style.use(["plot_style.txt"])
+        estimates = []
+        for block in range(start_block, end_block):
+            est1 = self.wt.next_block_feerate(block)
+            self.wt.estimate_strat = comp_strat
+            est2 = self.wt._feerate(block)
+            estimates.append([block, est1, est2])
+
+        est_df = DataFrame(
+            estimates, columns=["block", "estimateSmartFee-1", comp_strat]
+        )
+        est_df.set_index("block", inplace=True)
+        fig = est_df.plot()
+
+        plt.title("Feerate Estimates")
+        plt.xlabel("Block", labelpad=15)
+        plt.ylabel("Feerate (sats/vByte)", labelpad=15)
+
+        if output is not None:
+            plt.savefig(f"{output}.png")
+
+        if show:
+            plt.show()
+
 
 # FIXME: eventually have some small pytests
 if __name__ == "__main__":
@@ -924,3 +951,4 @@ if __name__ == "__main__":
     sim.run(start_block, end_block)
     sim.plot_frpv(start_block, end_block, show=True)
     # sim.plot_fee_history(start_block, end_block, show=True)
+    # sim.plot_fee_estimate("95Q1", start_block, end_block, show=True)
