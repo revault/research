@@ -103,6 +103,8 @@ class Simulation(object):
         self.vb_values = []
 
         # Simulation report
+        self.delegation_failures = 0
+        self.delegation_successes = 0
         self.report_init = f"""\
         Watchtower config:\n\
         O_0_factor: {self.wt.O_0_factor}\n\
@@ -226,10 +228,12 @@ class Simulation(object):
         )
         try:
             self.wt.allocate(vault_id, amount, block_height)
+            self.delegation_successes += 1
         except AllocationError as e:
             logging.error(
                 f"  Allocation transition FAILED for vault {vault_id}: {str(e)}"
             )
+            self.delegation_failures += 1
 
     def top_up_sequence(self, block_height):
         # loop over copy since allocate may remove an element, changing list index
@@ -362,6 +366,7 @@ class Simulation(object):
                 except RuntimeError:
                     logging.info("Not enough funds to allocate all the expected vaults")
                     # FIXME: should we break?
+                    break
                 self.vault_count += 1
 
             # Refill once per refill period
@@ -787,6 +792,11 @@ class Simulation(object):
 
         if show:
             plt.show()
+
+        report += (
+                f"Delegation failures: {self.delegation_failures} / {self.delegation_successes}"
+                f" ({self.delegation_failures / self.delegation_successes * 100}%)\n"
+        )
 
         return report
 
