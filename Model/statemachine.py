@@ -985,12 +985,12 @@ class StateMachine:
 
             # sort in increasing order of amount
             reserve = sorted(vault.allocated_coins(), key=lambda coin: coin.amount)
+            fbcoin_cost = feerate * P2WPKH_INPUT_SIZE
             try:
                 fbcoin = next(
                     coin
                     for coin in reserve
-                    if coin.amount - feerate * P2WPKH_INPUT_SIZE
-                    >= needed_fee - collected_fee
+                    if coin.amount - fbcoin_cost >= needed_fee - collected_fee
                 )
                 self.remove_coin(fbcoin)
                 coins.append(fbcoin)
@@ -1006,9 +1006,15 @@ class StateMachine:
                         f"Needed: {needed_fee}, got {collected_fee}"
                     )
                     break
-                # Otherwise, take the largest coin and continue.
-                # FIXME: this could select a coin that *decreases* the fee!
+                # Otherwise, take the largest coin that bump the fee (if there is
+                # one) and continue.
                 fbcoin = reserve[-1]
+                if fbcoin.amount <= fbcoin_cost + self.cancel_tx_fee(feerate, 0):
+                    logging.error(
+                        f"Not enough coins to cover for the Cancel fee of "
+                        f"{needed_fee} at feerate {feerate}. Collected {collected_fee} sats."
+                    )
+                    break
                 self.remove_coin(fbcoin)
                 collected_fee += fbcoin.amount - feerate * P2WPKH_INPUT_SIZE
                 coins.append(fbcoin)
