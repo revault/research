@@ -342,6 +342,14 @@ class StateMachine:
                     .rolling(thirtyD, min_periods=144)
                     .median()
                 )
+
+            elif self.estimate_strat == "95Q1":
+                self.hist_df["95Q1"] = (
+                    self.hist_df["mean_feerate"]
+                    .rolling(144, min_periods=72)
+                    .quantile(quantile=0.95, interpolation="linear")
+                )
+
             else:
                 raise ValueError("Strategy not implemented")
 
