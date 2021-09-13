@@ -136,15 +136,16 @@ class Simulation(object):
               Stakeholder doesn't know which coins are allocated or not.
         """
         bal = self.wt.balance()
-        frpv = self.wt.fee_reserve_per_vault(block_height)
-        reserve_total = frpv * (
+        target_dist = self.wt.fb_coins_dist(block_height)
+        amount_needed_per_vault = sum(target_dist)
+        reserve_total = amount_needed_per_vault * (
             expected_new_vaults + len(self.wt.list_vaults()) + self.refill_excess
         )
         R = reserve_total - bal
         if R <= 0:
             return 0
 
-        new_reserves = R // (frpv)
+        new_reserves = R // amount_needed_per_vault
 
         # Expected CF Tx fee
         feerate = self.wt.next_block_feerate(block_height)
