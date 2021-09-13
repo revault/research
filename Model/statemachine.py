@@ -11,7 +11,6 @@ TODO:
 import itertools
 import logging
 import numpy as np
-from copy import deepcopy
 from enum import Enum
 from pandas import read_csv
 from transactions import CancelTx, ConsolidateFanoutTx
@@ -793,15 +792,13 @@ class StateMachine:
         dist_req = self.coins_dist_reserve(block_height)
         dist_bonus = self.coins_dist_bonus(block_height)
         min_coin_value = self.min_fbcoin_value(block_height)
-        # FIXME: don't deepcopy
-        # Recovery state
-        coin_pool_copy = deepcopy(self.coin_pool)
-        vaults_copy = deepcopy(self.vaults)
+        remove_vault = False
 
-        try:
-            # If vault already exists and is under requirement, de-allocate its current fee
-            # reserve first
-            vault = next(v for v in self.list_vaults() if v.id == vault_id)
+        # If vault already exists and is under requirement, de-allocate its current fee
+        # reserve first
+        vault = self.vaults.get(vault_id)
+        if vault is not None:
+            # FIXME: the caller should check that?
             if not self.under_requirement(vault, block_height):
                 return
             else:
@@ -809,8 +806,8 @@ class StateMachine:
                     f"  Allocation transition to an existing vault {vault_id} at block"
                     f" {block_height}"
                 )
-                self.remove_vault(vault)
-        except (StopIteration):
+                remove_vault = True
+        else:
             logging.debug(
                 f"  Allocation transition to new vault {vault_id} at block"
                 f" {block_height}"
@@ -818,7 +815,8 @@ class StateMachine:
 
         # We only require to allocate up to the required reserve, the rest is a bonus
         # to avoid overpayments.
-        usable = [
+        usable = [] if not remove_vault else vault.allocated_coins
+        usable += [
             c.amount
             for c in self.coin_pool.unallocated_coins()
             if c.amount >= min_coin_value
@@ -832,9 +830,11 @@ class StateMachine:
             f"Unallocated coins: {self.coin_pool.unallocated_coins()}"
         )
         if required_reserve > total_usable:
-            self.coin_pool = coin_pool_copy
-            self.vaults = vaults_copy
             raise AllocationError(required_reserve, total_usable)
+        if remove_vault:
+            self.remove_vault(vault)
+        # NOTE: from now on we MUST NOT fail (or crash the program if we do as
+        # we won't recover from the modified state).
 
         vault = Vault(vault_id, amount)
         tolerances = [0.05, 0.1, 0.2, 0.3]
