@@ -566,6 +566,7 @@ class StateMachine:
 
         return self.grab_coins(coin_filter)
 
+    # FIXME: update doc comment
     def grab_coins_2(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
@@ -576,7 +577,10 @@ class StateMachine:
         if the fee-rate is low, all negligible coins
         """
         dist = set(self.fb_coins_dist(block_height))
-        low_feerate = self._feerate(block_height) <= 5
+        low_feerate = self._feerate(block_height) <= 20
+        high_dust = max(self.Vm(block_height) * 0.8, FB_DUST_THRESH)
+        low_dust = max(self.Vm(block_height) * 0.5, FB_DUST_THRESH)
+        vb = self.Vb(block_height)
 
         def coin_in_dist(coin_value, dist, tolerance):
             for x in dist:
@@ -600,13 +604,18 @@ class StateMachine:
                 if not coin_in_dist(coin.amount, dist, self.I_2_tol):
                     return True
 
-            if low_feerate and coin.amount < FB_DUST_THRESH:
+            if low_feerate and coin.amount < high_dust:
+                return True
+            if low_feerate and vb * 0.7 <= coin.amount <= vb * 0.9:
+                return True
+            if coin.amount < low_dust:
                 return True
 
             return False
 
         return self.grab_coins(coin_filter)
 
+    # FIXME: update doc comment
     def grab_coins_3(self, height):
         """Select coins to consume as inputs of the CF transaction.
 
@@ -615,8 +624,8 @@ class StateMachine:
             - Allocated ones that it's not safe to keep (those that would not bump the
               Cancel tx feerate at the reserve (max) feerate).
         """
-        dust = min(FB_DUST_THRESH, self.Vm(height))
-        vm_min = self.Vm(height) * 0.9
+        dust = min(FB_DUST_THRESH, self.Vm(height) * 0.8)
+        low_feerate = self._feerate(height) <= 5
 
         def coin_filter(coin):
             if coin.is_unconfirmed():
@@ -630,9 +639,7 @@ class StateMachine:
             ):
                 return False
 
-            if coin.amount < dust:
-                return True
-            if not self.coin_pool.is_allocated(coin) and coin.amount < vm_min:
+            if low_feerate and coin.amount < dust:
                 return True
 
             return False
