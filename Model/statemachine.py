@@ -957,6 +957,8 @@ class StateMachine:
 
         best_combination = None
         min_fee_added = None
+        max_paying_combination = None
+        max_fee_added = 0
         allocated_coins = vault.allocated_coins()
         for candidate in itertools.chain.from_iterable(
             itertools.combinations(allocated_coins, r)
@@ -965,6 +967,12 @@ class StateMachine:
             added_fees = sum(
                 [c.amount - P2WPKH_INPUT_SIZE * feerate for c in candidate]
             )
+            # In any case record the combination paying the most fees, as a
+            # best effort if we can't afford the whole fee needed.
+            if added_fees > max_fee_added:
+                max_paying_combination = candidate
+                max_fee_added = added_fees
+            # Record the combination overpaying the least
             if added_fees < needed_fee:
                 continue
             if min_fee_added is not None and added_fees >= min_fee_added:
@@ -972,8 +980,13 @@ class StateMachine:
             best_combination = candidate
             min_fee_added = added_fees
 
-        assert best_combination is not None
-        for coin in best_combination:
+        combination = best_combination
+        if combination is None:
+            # FIXME: we usually have tons of unallocated coins, can we take some
+            # from there out of emergency?
+            combination = max_paying_combination
+        assert combination is not None
+        for coin in combination:
             self.remove_coin(coin)
             coins.append(coin)
 
