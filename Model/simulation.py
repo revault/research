@@ -25,6 +25,7 @@ class Simulation(object):
         self,
         n_stk,
         n_man,
+        locktime,
         hist_feerate_csv,
         reserve_strat,
         estimate_strat,
@@ -64,6 +65,7 @@ class Simulation(object):
         self.wt = StateMachine(
             n_stk,
             n_man,
+            locktime,
             hist_feerate_csv,
             reserve_strat,
             estimate_strat,
@@ -116,6 +118,8 @@ class Simulation(object):
         Invalid spend rate: {self.invalid_spend_rate}\n\
         Catastrophe rate: {self.catastrophe_rate}\n\
         """
+        self.max_cancel_conf_time = 0
+        self.max_cf_conf_time = 0
 
     def new_vault_id(self):
         self.vault_id += 1
@@ -463,6 +467,29 @@ class Simulation(object):
                 self.vm_values.append([block, self.wt.Vm(block)])
                 self.vb_values.append([block, self.wt.Vb(block)])
 
+            if self.wt.mempool != []:
+                for tx in self.wt.mempool:
+                    if isinstance(tx, CancelTx):
+                        self.max_cancel_conf_time = max(
+                            self.max_cancel_conf_time, block - tx.broadcast_height
+                        )
+                        if block - tx.broadcast_height >= self.wt.locktime:
+                            logging.debug(
+                                f"Transaction {tx} was not confirmed before the"
+                                " expiration of the locktime!"
+                            )
+                            raise (
+                                RuntimeError(
+                                    f"Watchtower failed to confirm cancel"
+                                    f" transaction in time. All your base are belong"
+                                    f" to us."
+                                )
+                            )
+                    if isinstance(tx, ConsolidateFanoutTx):
+                        self.max_cf_conf_time = max(
+                            self.max_cancel_conf_time, block - tx.broadcast_height
+                        )
+
     def plot(self, output=None, show=False):
         """Plot info about the simulation stored according to configuration.
         If {output} is set, will write the plot image to this file.
@@ -788,6 +815,12 @@ class Simulation(object):
 
             plot_num += 1
 
+        # Report confirmation tracking
+        report += (
+            f"Max confirmation time for a Cancel Tx: {self.max_cancel_conf_time}\n"
+        )
+        report += f"Max confirmation time for a Consolidate-fanout Tx: {self.max_cf_conf_time}\n"
+
         if output is not None:
             plt.savefig(f"{output}.png")
 
@@ -795,8 +828,9 @@ class Simulation(object):
             plt.show()
 
         report += (
-                f"Delegation failures: {self.delegation_failures} / {self.delegation_successes}"
-                f" ({self.delegation_failures / self.delegation_successes * 100}%)\n"
+            f"Delegation failures: {self.delegation_failures} /"
+            f" {self.delegation_successes}"
+            f" ({self.delegation_failures / self.delegation_successes * 100}%)\n"
         )
 
         return report
@@ -859,6 +893,7 @@ if __name__ == "__main__":
     sim = Simulation(
         n_stk=5,
         n_man=5,
+        locktime=72,
         hist_feerate_csv="../block_fees/historical_fees.csv",
         reserve_strat="CUMMAX95Q90",
         estimate_strat="ME30",
