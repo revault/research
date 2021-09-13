@@ -11,7 +11,6 @@ TODO:
 import itertools
 import logging
 import numpy as np
-from copy import deepcopy
 from enum import Enum
 from pandas import read_csv
 from transactions import CancelTx, ConsolidateFanoutTx
@@ -196,8 +195,9 @@ class CoinPool:
         processing_state=ProcessingState.UNPROCESSED,
         fan_block=None,
         allocated_vault_id=None,
+        coin_id=None,
     ):
-        coin_id = self.new_coin_id()
+        coin_id = coin_id if coin_id is not None else self.new_coin_id()
         self.coins[coin_id] = FeebumpCoin(coin_id, amount, processing_state, fan_block)
         if allocated_vault_id is not None:
             assert isinstance(allocated_vault_id, int)
@@ -261,6 +261,51 @@ class StateMachine:
         self.Vm_cache = (None, None)  # block, value
         self.feerate = (None, None)  # block, value
 
+        # Prepare the rolling stats
+        thirty_days = 144 * 30
+        ninety_days = 144 * 90
+        self.hist_df["85Q1H"] = (
+            self.hist_df["mean_feerate"]
+            .rolling(6, min_periods=1)
+            .quantile(quantile=0.85, interpolation="linear")
+        )
+        if self.estimate_strat == "MA30":
+            self.hist_df["MA30"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(thirty_days, min_periods=144)
+                .mean()
+            )
+        elif self.estimate_strat == "ME30":
+            self.hist_df["ME30"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(thirty_days, min_periods=144)
+                .median()
+            )
+        elif self.estimate_strat != "85Q1H":
+            raise ValueError("Estimate strategy not implemented")
+
+        if self.reserve_strat == "95Q30":
+            self.hist_df["95Q30"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(thirty_days, min_periods=144)
+                .quantile(quantile=0.95, interpolation="linear")
+            )
+        elif self.reserve_strat == "95Q90":
+            self.hist_df["95Q90"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(ninety_days, min_periods=144)
+                .quantile(quantile=0.95, interpolation="linear")
+            )
+        elif self.reserve_strat == "CUMMAX95Q90":
+            self.hist_df["CUMMAX95Q90"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(ninety_days, min_periods=144)
+                .quantile(quantile=0.95, interpolation="linear")
+                .cummax()
+            )
+        else:
+            raise ValueError("Reserve strategy not implemented")
+
     def list_vaults(self):
         return list(self.vaults.values())
 
@@ -273,25 +318,30 @@ class StateMachine:
     def unconfirmed_transactions(self):
         return self.mempool
 
+    def allocate_coin(self, coin, vault):
+        self.coin_pool.allocate_coin(coin, vault)
+        vault.allocate_coin(coin)
+
     def remove_coin(self, coin):
         if self.coin_pool.is_allocated(coin):
             vault_id = self.coin_pool.coin_allocation(coin)
             self.vaults[vault_id].deallocate_coin(coin)
         self.coin_pool.remove_coin(coin)
 
-    def remove_coins(self, f):
-        """Remove all coins from the pool for which {f()} returns True.
-
-        Returns the removed coins.
-        """
-        removed_coins = []
+    def grab_coins(self, f):
+        """Grab coins from the pool according to a filter."""
+        coins = []
 
         for coin in list(self.coin_pool.list_coins()):
             if f(coin):
-                removed_coins.append(coin)
-                self.remove_coin(coin)
+                coins.append(coin)
 
-        return removed_coins
+        return coins
+
+    def remove_coins(self, coins):
+        """Remove all these coins from the pool."""
+        for c in coins:
+            self.remove_coin(c)
 
     def remove_vault(self, vault):
         for coin in vault.allocated_coins():
@@ -309,31 +359,6 @@ class StateMachine:
         if self.frpv[0] == block_height:
             return self.frpv[1]
 
-        thirtyD = 144 * 30  # 30 days in blocks
-        ninetyD = 144 * 90  # 90 days in blocks
-        if self.reserve_strat not in self.hist_df:
-            if self.reserve_strat == "95Q30":
-                self.hist_df["95Q30"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(thirtyD, min_periods=144)
-                    .quantile(quantile=0.95, interpolation="linear")
-                )
-            elif self.reserve_strat == "95Q90":
-                self.hist_df["95Q90"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(ninetyD, min_periods=144)
-                    .quantile(quantile=0.95, interpolation="linear")
-                )
-            elif self.reserve_strat == "CUMMAX95Q90":
-                self.hist_df["CUMMAX95Q90"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(ninetyD, min_periods=144)
-                    .quantile(quantile=0.95, interpolation="linear")
-                    .cummax()
-                )
-            else:
-                raise ValueError("Strategy not implemented")
-
         self.frpv = (block_height, self.hist_df[self.reserve_strat][block_height])
         return self.frpv[1]
 
@@ -344,32 +369,6 @@ class StateMachine:
         """
         if self.feerate[0] == block_height:
             return self.feerate[1]
-
-        thirtyD = 144 * 30  # 30 days in blocks
-        if self.estimate_strat not in self.hist_df:
-            if self.estimate_strat == "MA30":
-                self.hist_df["MA30"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(thirtyD, min_periods=144)
-                    .mean()
-                )
-
-            elif self.estimate_strat == "ME30":
-                self.hist_df["ME30"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(thirtyD, min_periods=144)
-                    .median()
-                )
-
-            elif self.estimate_strat == "95Q1":
-                self.hist_df["95Q1"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(144, min_periods=72)
-                    .quantile(quantile=0.95, interpolation="linear")
-                )
-
-            else:
-                raise ValueError("Strategy not implemented")
 
         self.feerate = (block_height, self.hist_df[self.estimate_strat][block_height])
         return self.feerate[1]
@@ -383,17 +382,7 @@ class StateMachine:
         try:
             return int(self.hist_df["est_1block"][height])
         except ValueError:
-            try:
-                # FIXME: we can do better than that.
-                return int(
-                    max(
-                        self.hist_df["mean_feerate"][h]
-                        for h in range(height - 2, height + 1)
-                    )
-                )
-            except ValueError:
-                # Mean feerate might be NA if there was no tx in this block
-                return 0
+            return int(self.hist_df["85Q1H"][height])
 
     def cancel_vbytes(self):
         """Size of the Cancel transaction without any feebump input"""
@@ -536,9 +525,23 @@ class StateMachine:
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
-        This version grabs all the existing feebump coins.
+        This version grabs all the feebump coins available.
         """
-        return self.remove_coins(lambda _: True)
+
+        def coin_filter(coin):
+            if coin.is_unconfirmed():
+                return False
+
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
+
+            return True
+
+        return self.grab_coins(coin_filter)
 
     def grab_coins_1(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -547,10 +550,21 @@ class StateMachine:
         This version grabs all the coins that either haven't been processed yet
         or are negligible.
         """
-        return self.remove_coins(
-            lambda coin: not coin.is_unconfirmed()
-            and (coin.is_unprocessed() or self.is_negligible(coin, block_height))
-        )
+
+        def coin_filter(coin):
+            if coin.is_unconfirmed():
+                return False
+
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
+
+            return coin.is_unprocessed() or self.is_negligible(coin, block_height)
+
+        return self.grab_coins(coin_filter)
 
     def grab_coins_2(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -575,6 +589,12 @@ class StateMachine:
                 return False
             if coin.is_unprocessed():
                 return True
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
 
             if not self.coin_pool.is_allocated(coin):
                 if not coin_in_dist(coin.amount, dist, self.I_2_tol):
@@ -585,7 +605,7 @@ class StateMachine:
 
             return False
 
-        return self.remove_coins(coin_filter)
+        return self.grab_coins(coin_filter)
 
     def grab_coins_3(self, height):
         """Select coins to consume as inputs of the CF transaction.
@@ -603,6 +623,12 @@ class StateMachine:
                 return False
             if coin.is_unprocessed():
                 return True
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
 
             if coin.amount < dust:
                 return True
@@ -611,7 +637,7 @@ class StateMachine:
 
             return False
 
-        return self.remove_coins(coin_filter)
+        return self.grab_coins(coin_filter)
 
     def min_fbcoin_value(self, height):
         """The absolute minimum value for a feebumping coin.
@@ -635,11 +661,6 @@ class StateMachine:
     # of allocation failures.
     def broadcast_consolidate_fanout(self, block_height):
         """
-        FIXME: Instead of removing coins, add them as inputs to a CF Tx. Don't remove any coins
-        if the vault status is "Canceling" (or "Spending"??). Instead of adding coins to the coin_pool,
-        add them as outputs to the CF Tx. Add the CF Tx to the mempool.
-
-
         Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
         new re-fills that enable accurate feebumping and 2) to consolidate negligible feebump coins
         if the current feerate is "low".
@@ -650,9 +671,6 @@ class StateMachine:
 
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
-        # FIXME: don't copy...
-        coin_pool_copy = deepcopy(self.coin_pool)
-        vaults_copy = deepcopy(self.vaults)
         # Set target values for our coin creation amounts
         dist_reserve = self.coins_dist_reserve(block_height)
         dist_bonus = self.coins_dist_bonus(block_height)
@@ -732,8 +750,6 @@ class StateMachine:
             )
             # Not enough in available coins to fanout to 1 complete fee_reserve, so
             # return 0 (as in, 0 fee paid)
-            self.coin_pool = coin_pool_copy
-            self.vaults = vaults_copy
             return 0
 
         remainder = (
@@ -776,6 +792,7 @@ class StateMachine:
                 for coin in added_coins:
                     coin.increase_amount(increase)
 
+        self.remove_coins(coins)
         self.mempool.append(ConsolidateFanoutTx(block_height, coins, added_coins))
         return cf_tx_fee
 
@@ -788,7 +805,6 @@ class StateMachine:
             return True
         return False
 
-    # FIXME: cleanup this function..
     def _allocate_0(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
@@ -796,15 +812,15 @@ class StateMachine:
         dist_req = self.coins_dist_reserve(block_height)
         dist_bonus = self.coins_dist_bonus(block_height)
         min_coin_value = self.min_fbcoin_value(block_height)
-        # FIXME: don't deepcopy
-        # Recovery state
-        coin_pool_copy = deepcopy(self.coin_pool)
-        vaults_copy = deepcopy(self.vaults)
+        # If the vault exists and is under reserve, don't remove it immediately
+        # to make sure we won't fail after modifying the internal state.
+        remove_vault = False
 
-        try:
-            # If vault already exists and is under requirement, de-allocate its current fee
-            # reserve first
-            vault = next(v for v in self.list_vaults() if v.id == vault_id)
+        # If vault already exists and is under requirement, de-allocate its current fee
+        # reserve first
+        vault = self.vaults.get(vault_id)
+        if vault is not None:
+            # FIXME: the caller should check that?
             if not self.under_requirement(vault, block_height):
                 return
             else:
@@ -812,8 +828,8 @@ class StateMachine:
                     f"  Allocation transition to an existing vault {vault_id} at block"
                     f" {block_height}"
                 )
-                self.remove_vault(vault)
-        except (StopIteration):
+                remove_vault = True
+        else:
             logging.debug(
                 f"  Allocation transition to new vault {vault_id} at block"
                 f" {block_height}"
@@ -821,28 +837,31 @@ class StateMachine:
 
         # We only require to allocate up to the required reserve, the rest is a bonus
         # to avoid overpayments.
-        usable = [
+        usable = [] if not remove_vault else list(vault.allocated_coins())
+        usable += [
             c.amount
             for c in self.coin_pool.unallocated_coins()
             if c.amount >= min_coin_value
         ]
         total_usable = sum(usable)
         required_reserve = sum(dist_req)
-
         logging.debug(
             f"    Fee Reserve per Vault: {required_reserve}, "
             f"Usable unallocated coins amounts: {usable} "
             f"Unallocated coins: {self.coin_pool.unallocated_coins()}"
         )
         if required_reserve > total_usable:
-            self.coin_pool = coin_pool_copy
-            self.vaults = vaults_copy
             raise AllocationError(required_reserve, total_usable)
+        if remove_vault:
+            self.remove_vault(vault)
+        # NOTE: from now on we MUST NOT fail (or crash the program if we do as
+        # we won't recover from the modified state).
 
-        vault = Vault(vault_id, amount)
-        tolerances = [0.05, 0.1, 0.2, 0.3]
+        self.vaults[vault_id] = Vault(vault_id, amount)
+        vault = self.vaults[vault_id]
         # First optimistically search for coins in the required reserve with
         # small tolerance.
+        tolerances = [0.05, 0.1, 0.2, 0.3]
         for tol in tolerances:
             not_found = []
             for x in dist_req:
@@ -850,13 +869,12 @@ class StateMachine:
                     fbcoin = next(
                         coin
                         for coin in self.coin_pool.unallocated_coins()
-                        if ((1 - tol) * x <= coin.amount <= (1 + tol) * x)
+                        if ((1 - tol / 2) * x <= coin.amount <= (1 + tol) * x)
                     )
-                    self.coin_pool.allocate_coin(fbcoin, vault)
-                    vault.allocate_coin(fbcoin)
+                    self.allocate_coin(fbcoin, vault)
                     logging.debug(
                         f"    {fbcoin} found with tolerance {tol*100}%, added to"
-                        " fee reserve"
+                        " fee reserve. Distribution value: {x}"
                     )
                 except (StopIteration):
                     logging.debug(
@@ -873,12 +891,11 @@ class StateMachine:
                 break
 
         # If we couldn't find large enough coins close to the dist, complete
-        # with coins off the dist  but make sure they increase the fee at the
+        # with coins off the dist but make sure they increase the fee at the
         # worst case feerate.
         for coin in self.coin_pool.unallocated_coins():
             if coin.amount >= min_coin_value:
-                self.coin_pool.allocate_coin(coin, vault)
-                vault.allocate_coin(coin)
+                self.allocate_coin(coin, vault)
                 logging.debug(f"    {coin} found to complete")
                 if vault.reserve_balance() >= required_reserve:
                     break
@@ -891,17 +908,14 @@ class StateMachine:
         # coins in the bonus reserve
         for x in dist_bonus:
             for coin in self.coin_pool.unallocated_coins():
-                if x * 0.85 <= coin.amount <= x * 1.15:
-                    self.coin_pool.allocate_coin(coin, vault)
-                    vault.allocate_coin(coin)
+                if x * 0.7 <= coin.amount <= x * 1.3:
+                    self.allocate_coin(coin, vault)
                     break
 
         logging.debug(
             f"    Reserve for vault {vault.id} has excess of"
             f" {vault.reserve_balance() - required_reserve}"
         )
-        # Successful new delegation and allocation!
-        self.vaults[vault.id] = vault
 
     def allocate(self, vault_id, amount, block_height):
         if self.allocate_version == 0:
@@ -910,25 +924,16 @@ class StateMachine:
     def broadcast_cancel(self, vault_id, block_height):
         """Construct and broadcast the cancel tx.
 
-        FIXME: Instead of removing selected coins, add them as inputs
-        to a cancel tx. Add the cancel tx to the mempool. Set the vault's status
-        to "canceling".
-
         The cancel must be updated with a fee (the large Vm allocated to it).
         If this fee is unsuccessful at pushing the cancel through, additional small coins may
         be added from the fee_reserve.
         """
-        vault = next(
-            (vault for vault in self.list_vaults() if vault.id == vault_id), None
-        )
-        if vault is None:
-            raise RuntimeError(f"No vault found with id {vault_id}")
-        # FIXME: i think this doesn't hold
-        assert vault.is_available(), "FIXME"
+        vault = self.vaults[vault_id]
 
         feerate = self.next_block_feerate(block_height)
         needed_fee = self.cancel_tx_fee(feerate, 0)
 
+        # FIXME: should we dropt that??
         # Strat 1: randomly select coins until the fee is met
         # Performs moderately bad in low-stable fee market and ok in volatile fee market
         # while init_fee > 0:
@@ -979,12 +984,12 @@ class StateMachine:
 
             # sort in increasing order of amount
             reserve = sorted(vault.allocated_coins(), key=lambda coin: coin.amount)
+            fbcoin_cost = feerate * P2WPKH_INPUT_SIZE
             try:
                 fbcoin = next(
                     coin
                     for coin in reserve
-                    if coin.amount - feerate * P2WPKH_INPUT_SIZE
-                    >= needed_fee - collected_fee
+                    if coin.amount - fbcoin_cost >= needed_fee - collected_fee
                 )
                 self.remove_coin(fbcoin)
                 coins.append(fbcoin)
@@ -1000,9 +1005,15 @@ class StateMachine:
                         f"Needed: {needed_fee}, got {collected_fee}"
                     )
                     break
-                # Otherwise, take the largest coin and continue.
-                # FIXME: this could select a coin that *decreases* the fee!
+                # Otherwise, take the largest coin that bump the fee (if there is
+                # one) and continue.
                 fbcoin = reserve[-1]
+                if fbcoin.amount <= fbcoin_cost + self.cancel_tx_fee(feerate, 0):
+                    logging.error(
+                        f"Not enough coins to cover for the Cancel fee of "
+                        f"{needed_fee} at feerate {feerate}. Collected {collected_fee} sats."
+                    )
+                    break
                 self.remove_coin(fbcoin)
                 collected_fee += fbcoin.amount - feerate * P2WPKH_INPUT_SIZE
                 coins.append(fbcoin)
@@ -1018,7 +1029,6 @@ class StateMachine:
         max_paying_combination = None
         max_fee_added = 0
         allocated_coins = vault.allocated_coins()
-        print(allocated_coins)
         for candidate in itertools.chain.from_iterable(
             itertools.combinations(allocated_coins, r)
             for r in range(1, len(allocated_coins) + 1)
@@ -1080,12 +1090,16 @@ class StateMachine:
             min_fee = tx.fee + self.cancel_tx_fee(2, len(tx.fbcoins))
             needed_fee = max(new_fee, min_fee)
 
-            # Unreserve the previous feebump coins and remove the previous tx
+            # Add the feebump coins back to the pool and remove the previous tx
             for coin in tx.fbcoins:
-                self.coin_pool.add_coin(
-                    coin.amount, coin.processing_state, coin.fan_block, vault.id
+                coin = self.coin_pool.add_coin(
+                    coin.amount,
+                    coin.processing_state,
+                    coin.fan_block,
+                    vault.id,
+                    coin_id=coin.id,
                 )
-                self.coin_pool.allocate_coin(coin, vault)
+                vault.allocate_coin(coin)
             self.mempool.remove(tx)
 
             # Push a new tx with coins selected to meet the new fee
@@ -1093,6 +1107,14 @@ class StateMachine:
                 coins = self.cancel_coin_selec_0(vault, needed_fee, new_feerate)
             elif self.cancel_coin_selection == 1:
                 coins = self.cancel_coin_selec_1(vault, needed_fee, new_feerate)
+
+            # Deallocate the coins from the first tx that were not chosen in
+            # the bump tx.
+            for coin in tx.fbcoins:
+                if coin not in coins:
+                    vault.deallocate_coin(coin)
+                    self.coin_pool.deallocate_coin(coin)
+
             self.mempool.append(CancelTx(height, vault.id, self.cancel_vbytes(), coins))
 
     def spend(self, vault_id, height):
