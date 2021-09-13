@@ -9,13 +9,9 @@ import random
 from matplotlib import pyplot as plt
 import numpy as np
 from pandas import DataFrame
-from statemachine import StateMachine
+from statemachine import StateMachine, AllocationError
 from transactions import ConsolidateFanoutTx, CancelTx
 from utils import cf_tx_size, P2WPKH_INPUT_SIZE, P2WPKH_OUTPUT_SIZE, BLOCKS_PER_DAY
-
-
-class AllocationError(Exception):
-    pass
 
 
 class NoVaultToSpend(RuntimeError):
@@ -222,19 +218,18 @@ class Simulation(object):
         self.top_up_sequence(block_height)
 
         # Allocation transition
-        # If WT fails to acknowledge new delegation, raise AllocationError
+        # Delegate a vault
+        amount = int(10e10)  # 100 BTC
+        vault_id = self.new_vault_id()
+        logging.debug(
+            f"  Allocation transition at block {block_height} to vault {vault_id}"
+        )
         try:
-            # Delegate a vault
-            amount = int(10e10)  # 100 BTC
-            vault_id = self.new_vault_id()
-            logging.debug(
-                f"  Allocation transition at block {block_height} to vault {vault_id}"
-            )
             self.wt.allocate(vault_id, amount, block_height)
-            self.vault_count += 1
-        except (RuntimeError):
-            logging.debug(f"  Allocation transition FAILED for vault {vault_id}")
-            raise (AllocationError())
+        except AllocationError as e:
+            logging.error(
+                f"  Allocation transition FAILED for vault {vault_id}: {str(e)}"
+            )
 
     def top_up_sequence(self, block_height):
         # loop over copy since allocate may remove an element, changing list index
@@ -247,9 +242,10 @@ class Simulation(object):
                 )
                 assert isinstance(vault.amount, int)
                 self.wt.allocate(vault.id, vault.amount, block_height)
-            except (RuntimeError):
-                logging.debug(f"  Allocation transition FAILED for vault {vault.id}")
-                raise (AllocationError())
+            except AllocationError as e:
+                logging.error(
+                    f"  Allocation transition FAILED for vault {vault.id}: {str(e)}"
+                )
 
     def spend_sequence(self, block_height):
         logging.debug(f"Spend sequence at block {block_height}")
@@ -365,43 +361,37 @@ class Simulation(object):
                     self.wt.allocate(self.new_vault_id(), amount, block)
                 except RuntimeError:
                     logging.info("Not enough funds to allocate all the expected vaults")
+                    # FIXME: should we break?
                 self.vault_count += 1
 
-            try:
-                # Refill once per refill period
-                if block % self.refill_period == 0:
-                    self.refill_sequence(block, 0)
+            # Refill once per refill period
+            if block % self.refill_period == 0:
+                self.refill_sequence(block, 0)
 
-                # The spend rate is a rate per day
-                if random.random() < self.spend_rate / BLOCKS_PER_DAY:
-                    self.delegate_sequence(block)
-                    # generate invalid spend, requires cancel
-                    if random.random() < self.invalid_spend_rate:
-                        try:
-                            self.cancel_sequence(block)
-                        except NoVaultToSpend:
-                            logging.debug("Failed to Cancel, no vault to spend")
-                    # generate valid spend, requires processing
-                    else:
-                        try:
-                            self.spend_sequence(block)
-                        except NoVaultToSpend:
-                            logging.debug("Failed to Spend, no vault to spend")
-
-                # The catastrophe rate is a rate per day
-                if random.random() < self.catastrophe_rate / BLOCKS_PER_DAY:
+            # The spend rate is a rate per day
+            if random.random() < self.spend_rate / BLOCKS_PER_DAY:
+                self.delegate_sequence(block)
+                # generate invalid spend, requires cancel
+                if random.random() < self.invalid_spend_rate:
                     try:
-                        self.catastrophe_sequence(block)
+                        self.cancel_sequence(block)
                     except NoVaultToSpend:
-                        logging.debug(
-                            "Failed to Cancel (catastrophe), no vault to spend"
-                        )
-                    # Reboot operation after catastrophe
-                    self.refill_sequence(block, self.expected_active_vaults)
-            except (AllocationError):
-                self.end_block = block
-                logging.error(f"Allocation error at block {block}")
-                break
+                        logging.debug("Failed to Cancel, no vault to spend")
+                # generate valid spend, requires processing
+                else:
+                    try:
+                        self.spend_sequence(block)
+                    except NoVaultToSpend:
+                        logging.debug("Failed to Spend, no vault to spend")
+
+            # The catastrophe rate is a rate per day
+            if random.random() < self.catastrophe_rate / BLOCKS_PER_DAY:
+                try:
+                    self.catastrophe_sequence(block)
+                except NoVaultToSpend:
+                    logging.debug("Failed to Cancel (catastrophe), no vault to spend")
+                # Reboot operation after catastrophe
+                self.refill_sequence(block, self.expected_active_vaults)
 
             if self.with_balance:
                 self.balances.append(

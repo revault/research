@@ -33,6 +33,16 @@ class CfError(RuntimeError):
         self.message = message
 
 
+class AllocationError(RuntimeError):
+    """We don't have enough unallocated coins to pay for an entire vault reserve"""
+
+    def __init__(self, required_reserve, unallocated_balance):
+        self.message = (
+            f"Required reserve: {required_reserve}, unallocated "
+            f"balance: {unallocated_balance}"
+        )
+
+
 class ProcessingState(Enum):
     """The state of feebump coin"""
 
@@ -769,10 +779,7 @@ class StateMachine:
         if required_reserve > total_unallocated:
             self.coin_pool = coin_pool_copy
             self.vaults = vaults_copy
-            raise RuntimeError(
-                f"Watchtower doesn't acknowledge delegation for vault {vault_id} since"
-                " total un-allocated and processed fee-reserve is insufficient"
-            )
+            raise AllocationError(required_reserve, total_unallocated)
 
         vault = Vault(vault_id, amount)
         dist = self.fb_coins_dist(block_height)
