@@ -910,8 +910,9 @@ class StateMachine:
     def cancel_coin_selec_0(self, vault, needed_fee, feerate):
         """Select smallest coin to cover init_fee, if no coin, remove largest and try again."""
         coins = []
+        collected_fee = 0
 
-        while needed_fee > 0:
+        while collected_fee < needed_fee:
             if vault.allocated_coins() == []:
                 raise RuntimeError(
                     f"Fee reserve for vault {vault.id} was insufficient to process"
@@ -924,15 +925,28 @@ class StateMachine:
                 fbcoin = next(
                     coin
                     for coin in reserve
-                    if coin.amount - feerate * P2WPKH_INPUT_SIZE >= needed_fee
+                    if coin.amount - feerate * P2WPKH_INPUT_SIZE
+                    >= needed_fee - collected_fee
                 )
                 self.remove_coin(fbcoin)
                 coins.append(fbcoin)
                 break
             except (StopIteration):
+                # If we exhausted the reserve, stop there with the entire reserve
+                # allocated to the Cancel.
+                # FIXME: we usually have tons of unallocated coins, can we take some
+                # from there out of emergency?
+                if len(reserve) == 0:
+                    logging.error(
+                        "Not enough fbcoins to pay for Cancel fee."
+                        f"Needed: {needed_fee}, got {collected_fee}"
+                    )
+                    break
+                # Otherwise, take the largest coin and continue.
+                # FIXME: this could select a coin that *decreases* the fee!
                 fbcoin = reserve[-1]
                 self.remove_coin(fbcoin)
-                needed_fee -= fbcoin.amount - feerate * P2WPKH_INPUT_SIZE
+                collected_fee += fbcoin.amount - feerate * P2WPKH_INPUT_SIZE
                 coins.append(fbcoin)
 
         return coins
