@@ -109,8 +109,8 @@ class Simulation(object):
         self.delegation_successes = 0
         self.report_init = f"""\
         Watchtower config:\n\
-        O_0_factor: {self.wt.O_0_factor}\n\
-        O_1_factor: {self.wt.O_1_factor}\n\
+        vb_coins_count: {self.wt.vb_coins_count}\n\
+        vm_factor: {self.wt.vm_factor}\n\
         Refill excess: {self.refill_excess}\n\
         Expected active vaults: {self.expected_active_vaults}\n\
         Refill period: {self.refill_period}\n\
@@ -368,8 +368,8 @@ class Simulation(object):
                 amount = int(10e10)  # 100 BTC
                 try:
                     self.wt.allocate(self.new_vault_id(), amount, block)
-                except RuntimeError:
-                    logging.info("Not enough funds to allocate all the expected vaults")
+                except AllocationError as e:
+                    logging.error(f"Not enough funds to allocate all the expected vaults: {str(e)}")
                     # FIXME: should we break?
                     break
                 self.vault_count += 1
@@ -440,7 +440,7 @@ class Simulation(object):
                 # Check if wt becomes risky
                 if switch == "good":
                     for vault in self.wt.list_available_vaults():
-                        if self.wt.under_requirement(vault, block) != 0:
+                        if self.wt.under_requirement(vault, block):
                             switch = "bad"
                             break
                     if switch == "bad":
@@ -450,7 +450,7 @@ class Simulation(object):
                 if switch == "bad":
                     any_risk = []
                     for vault in self.wt.list_available_vaults():
-                        if self.wt.under_requirement(vault, block) != 0:
+                        if self.wt.under_requirement(vault, block):
                             any_risk.append(True)
                             break
                     if True not in any_risk:

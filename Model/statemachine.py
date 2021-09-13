@@ -252,8 +252,8 @@ class StateMachine:
         self.allocate_version = allocate_version
         self.cancel_coin_selection = cancel_coin_selec
 
-        self.O_0_factor = 7  # num of Vb coins
-        self.O_1_factor = 2  # multiplier M
+        self.vb_coins_count = 8
+        self.vm_factor = 1.2  # multiplier M
         self.I_2_tol = 0.3
 
         # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
@@ -429,23 +429,19 @@ class StateMachine:
         """Amount for a backup feebump coin"""
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
-        vb = reserve / self.O_0_factor
-        min_vb = self.cancel_tx_fee(10, 0)
+        vb = reserve / self.vb_coins_count
+        min_vb = self.cancel_tx_fee(5, 0)
         return int(reserve_rate * P2WPKH_INPUT_SIZE + max(vb, min_vb))
 
-    def fb_coins_dist(self, block_height):
-        """The coin distribution to create with a CF TX.
+    def coins_dist_reserve(self, block_height):
+        """The coin amount distribution used to cover up to the worst case.
 
-        O(t) in the paper.
-        The sum over O should be equal to the fee reserve per vault.
-        There should be at least 1 Vm sized coin in O.
+        These coins are needed to be able to Cancel up the reserve feerate, but
+        not usually optimal during normal operations.
         """
-        # Strategy 0
-        # dist = [Vm, Vb, Vb, ...Vb]  with 1 + self.O_0_factor elements
         if self.O_version == 0:
-            Vm = self.Vm(block_height)
-            Vb = self.Vb(block_height)
-            return [Vm] + [Vb for i in range(self.O_0_factor)]
+            vb = self.Vb(block_height)
+            return [vb] * self.vb_coins_count
 
         # Strategy 1
         # dist = [Vm, MVm, 2MVm, 3MVm, ...]
@@ -454,7 +450,7 @@ class StateMachine:
             fbcoin_cost = int(reserve_feerate * P2WPKH_INPUT_SIZE)
             frpv = self.fee_reserve_per_vault(block_height)
             Vm = self.Vm(block_height)
-            M = self.O_1_factor  # Factor increase per coin
+            M = self.vm_factor  # Factor increase per coin
             dist = [Vm]
             while sum(dist) < frpv - len(dist) * fbcoin_cost:
                 dist.append(int((len(dist)) * M * Vm + fbcoin_cost))
@@ -471,29 +467,29 @@ class StateMachine:
                 dist[-1] += excess
             return dist
 
-        # Strategy 2
-        # This is strategy 0 but hacked with results feedback
-        if self.O_version == 2:
-            # We want a large enough Vm coin as a first shot
-            vb = self.Vb(block_height)
-            vm = max(self.Vm(block_height), 2 * vb)
+    def coins_dist_bonus(self, block_height):
+        """The coin amount distribution used to reduce overpayments.
 
-            # Don't create more vb coins than is necessary
-            reserve = self.fee_reserve_per_vault(block_height)
-            vb_count = reserve // vb
-            excess = int(vb * (reserve / vb - vb_count))
-            vm += excess
+        These coins can't be used for feebumping in worst case scenario (at
+        reserve feerate) but still useful to reduce overpayments.
+        """
+        vm = self.Vm(block_height)
+        vb = self.Vb(block_height)
+        dist = [vm]
+        while vm * self.vm_factor < vb:
+            vm *= self.vm_factor
+            dist.append(int(vm))
+        return dist
 
-            # Instead opportunistically create some small Vbs that we can't
-            # rely on under our assumptions (feerate might jump to reserve
-            # at any time and they would become unusable) but are good to
-            # have during low fee periods to avoid overpaying.
-            # This is a tradeoff between increasing the reserve requirements
-            # (we effectively create them in addition to the reserve) and
-            # overpaying too much during low fee periods.
-            small_vbs = [int(max(vb / 4, float(FB_DUST_THRESH))) for _ in range(4)]
+    def fb_coins_dist(self, block_height):
+        """The coin amount distribution to target for a vault reserve.
 
-            return [vm] + [vb for i in range(vb_count)] + small_vbs
+        This is the concatenation of the reserve distribution and the bonus
+        distribution.
+        """
+        return self.coins_dist_reserve(block_height) + self.coins_dist_bonus(
+            block_height
+        )
 
     def unallocated_balance(self):
         return sum(
@@ -508,14 +504,13 @@ class StateMachine:
         return self.coin_pool.balance()
 
     def under_requirement(self, vault, block_height):
-        """Returns the amount under requirement for the given fee_reserve."""
-        required_reserve = self.fee_reserve_per_vault(block_height)
-        balance = vault.reserve_balance()
-        if balance >= required_reserve:
-            return 0
-        else:
-            # Satoshis should be integer amounts
-            return int(required_reserve - balance)
+        """Returns whether a given vault wouldn't be able to bump at reserve feerate."""
+        required_reserve = sum(self.coins_dist_reserve(block_height))
+        min_coin_value = self.min_fbcoin_value(block_height)
+        usable_balance = sum(
+            [c.amount for c in vault.fb_coins.values() if c.amount >= min_coin_value]
+        )
+        return usable_balance < required_reserve
 
     def is_negligible(self, coin, block_height):
         """A coin is considered negligible if its amount is less than the minimum
@@ -599,10 +594,9 @@ class StateMachine:
         some fb coins for consolidation:
             - Allocated ones that it's not safe to keep (those that would not bump the
               Cancel tx feerate at the reserve (max) feerate).
-            - Unallocated ones ones we would not create, if the current feerate is low.
         """
-        # FIXME: this should use the next 3 blocks feerate
-        low_feerate = self._feerate(height) <= 5
+        dust = min(FB_DUST_THRESH, self.Vm(height))
+        vm_min = self.Vm(height) * 0.9
 
         def coin_filter(coin):
             if coin.is_unconfirmed():
@@ -610,7 +604,9 @@ class StateMachine:
             if coin.is_unprocessed():
                 return True
 
-            if low_feerate and coin.amount < FB_DUST_THRESH:
+            if coin.amount < dust:
+                return True
+            if not self.coin_pool.is_allocated(coin) and coin.amount < vm_min:
                 return True
 
             return False
@@ -618,6 +614,15 @@ class StateMachine:
         return self.remove_coins(coin_filter)
 
     def min_fbcoin_value(self, height):
+        """The absolute minimum value for a feebumping coin.
+
+        Pays for its inclusion at the maximum feerate AND increases the Cancel
+        tx fee by at least 2sat/vbyte.
+        """
+        feerate = self._feerate_reserve_per_vault(height)
+        return int(feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(2, 0))
+
+    def min_acceptable_fbcoin_value(self, height):
         """The minimum value for a feebumping coin we create is one that allows
         to pay for its inclusion at the maximum feerate AND increase the Cancel
         tx fee by at least 5sat/vbyte.
@@ -625,6 +630,9 @@ class StateMachine:
         feerate = self._feerate_reserve_per_vault(height)
         return int(feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(5, 0))
 
+    # FIXME: eventually we should allocate as many outputs as we can, even if
+    # it only represents part of a reserve. It would really lower the number
+    # of allocation failures.
     def broadcast_consolidate_fanout(self, block_height):
         """
         FIXME: Instead of removing coins, add them as inputs to a CF Tx. Don't remove any coins
@@ -646,7 +654,8 @@ class StateMachine:
         coin_pool_copy = deepcopy(self.coin_pool)
         vaults_copy = deepcopy(self.vaults)
         # Set target values for our coin creation amounts
-        target_coin_dist = self.fb_coins_dist(block_height)
+        dist_reserve = self.coins_dist_reserve(block_height)
+        dist_bonus = self.coins_dist_bonus(block_height)
 
         # Select and consume inputs with I(t), returning the coins
         if self.I_version == 0:
@@ -668,30 +677,50 @@ class StateMachine:
         cf_size = cf_tx_size(n_inputs=len(coins), n_outputs=0)
         cf_tx_fee = int(cf_size * feerate)
         # The cost of a distribution for a single vault in the CF tx
-        dist_size = P2WPKH_OUTPUT_SIZE * len(target_coin_dist)
-        dist_fees = int(dist_size * feerate)
-        dist_cost = (
-            sum(target_coin_dist) + dist_fees
-        )  # The amount needed to deduct from total amount of inputs
+        dist_rese_size = P2WPKH_OUTPUT_SIZE * len(dist_reserve)
+        dist_rese_fees = int(dist_rese_size * feerate)
+        dist_rese_cost = sum(dist_reserve) + dist_rese_fees
+        dist_bonu_size = P2WPKH_OUTPUT_SIZE * len(dist_bonus)
+        dist_bonu_fees = int(dist_bonu_size * feerate)
+        dist_bonu_cost = sum(dist_bonus) + dist_bonu_fees
         # Add new distributions of coins to the CF until we can't afford it anymore
         total_to_consume = sum(c.amount for c in coins)
         num_new_reserves = 0
+        num_new_bonuses = 0
         consumed = 0
         while True:
-            consumed += dist_cost
+            # First do the reserve
+            consumed += dist_rese_cost
             if consumed > total_to_consume:
                 break
-
             # Don't create a new set of outputs if we can't pay the fees for it
             if total_to_consume - consumed <= cf_tx_fee:
                 break
-            cf_size += dist_size
-            cf_tx_fee += int(dist_size * feerate)
+            cf_size += dist_rese_size
+            cf_tx_fee += int(dist_rese_size * feerate)
             if cf_size > MAX_TX_SIZE:
                 raise CfError("The consolidate_fanout transaction is too large!")
 
             num_new_reserves += 1
-            for x in target_coin_dist:
+            for x in dist_reserve:
+                added_coins.append(
+                    self.coin_pool.add_coin(x, processing_state=ProcessingState.PENDING)
+                )
+
+            # Then if we still have enough do the bonus
+            consumed += dist_bonu_cost
+            if consumed > total_to_consume:
+                continue
+            # Don't create a new set of outputs if we can't pay the fees for it
+            if total_to_consume - consumed <= cf_tx_fee:
+                break
+            cf_size += dist_bonu_size
+            cf_tx_fee += int(dist_bonu_size * feerate)
+            if cf_size > MAX_TX_SIZE:
+                raise CfError("The consolidate_fanout transaction is too large!")
+
+            num_new_bonuses += 1
+            for x in dist_bonus:
                 added_coins.append(
                     self.coin_pool.add_coin(x, processing_state=ProcessingState.PENDING)
                 )
@@ -707,7 +736,11 @@ class StateMachine:
             self.vaults = vaults_copy
             return 0
 
-        remainder = total_to_consume - (num_new_reserves * sum(target_coin_dist))
+        remainder = (
+            total_to_consume
+            - (num_new_reserves * sum(dist_reserve))
+            - (num_new_bonuses * sum(dist_bonus))
+        )
         assert isinstance(remainder, int)
         assert (
             remainder >= cf_tx_fee
@@ -717,7 +750,7 @@ class StateMachine:
         remainder -= cf_tx_fee
         if remainder > 0:
             # .. First try to opportunistically add more fb coins
-            added_coin_value = int(self.min_fbcoin_value(block_height) * 1.3)
+            added_coin_value = int(self.min_acceptable_fbcoin_value(block_height) * 1.3)
             output_fee = int(P2WPKH_OUTPUT_SIZE * feerate)
             # The number of coins this large we can add
             added_coins_count = remainder / (added_coin_value + output_fee)
@@ -725,7 +758,7 @@ class StateMachine:
                 # For a bias toward a lower number of larger outputs, truncate
                 # the number of coins added and add the excess value to the outputs
                 added_coins_count = int(added_coins_count)
-                outputs_fee = added_coin_value + output_fee
+                outputs_fee = added_coin_value + output_fee * added_coins_count
                 added_coin_value = int((remainder - outputs_fee) / added_coins_count)
                 for _ in range(added_coins_count):
                     added_coins.append(
@@ -736,7 +769,9 @@ class StateMachine:
                 cf_tx_fee += outputs_fee
             else:
                 # And fallback to distribute the excess across the created fb coins
-                num_outputs = num_new_reserves * len(target_coin_dist)
+                num_outputs = num_new_reserves * len(
+                    dist_reserve
+                ) + num_new_bonuses * len(dist_bonus)
                 increase = remainder // num_outputs
                 for coin in added_coins:
                     coin.increase_amount(increase)
@@ -758,6 +793,9 @@ class StateMachine:
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
+        dist_req = self.coins_dist_reserve(block_height)
+        dist_bonus = self.coins_dist_bonus(block_height)
+        min_coin_value = self.min_fbcoin_value(block_height)
         # FIXME: don't deepcopy
         # Recovery state
         coin_pool_copy = deepcopy(self.coin_pool)
@@ -767,7 +805,7 @@ class StateMachine:
             # If vault already exists and is under requirement, de-allocate its current fee
             # reserve first
             vault = next(v for v in self.list_vaults() if v.id == vault_id)
-            if self.under_requirement(vault, block_height) == 0:
+            if not self.under_requirement(vault, block_height):
                 return
             else:
                 logging.debug(
@@ -781,99 +819,87 @@ class StateMachine:
                 f" {block_height}"
             )
 
-        total_unallocated = sum([c.amount for c in self.coin_pool.unallocated_coins()])
-        required_reserve = self.fee_reserve_per_vault(block_height)
+        # We only require to allocate up to the required reserve, the rest is a bonus
+        # to avoid overpayments.
+        usable = [
+            c.amount
+            for c in self.coin_pool.unallocated_coins()
+            if c.amount >= min_coin_value
+        ]
+        total_usable = sum(usable)
+        required_reserve = sum(dist_req)
 
-        Vm = self.Vm(block_height)
-        logging.debug(f"    Fee Reserve per Vault: {required_reserve}, Vm = {Vm}")
-        # Note this check is lax: we may have more unallocated than the required reserve
-        # but still not have enough accounting for the fbcoin input fees.
-        if required_reserve > total_unallocated:
+        logging.debug(
+            f"    Fee Reserve per Vault: {required_reserve}, "
+            f"Usable unallocated coins amounts: {usable} "
+            f"Unallocated coins: {self.coin_pool.unallocated_coins()}"
+        )
+        if required_reserve > total_usable:
             self.coin_pool = coin_pool_copy
             self.vaults = vaults_copy
-            raise AllocationError(required_reserve, total_unallocated)
+            raise AllocationError(required_reserve, total_usable)
 
         vault = Vault(vault_id, amount)
-        dist = self.fb_coins_dist(block_height)
         tolerances = [0.05, 0.1, 0.2, 0.3]
-        while vault.reserve_balance() < required_reserve:
-            # Optimistically search for coins in O with small tolerance
-            for tol in tolerances:
-                not_found = []
-                for x in dist:
-                    try:
-                        fbcoin = next(
-                            coin
-                            for coin in self.coin_pool.unallocated_coins()
-                            if ((1 - tol) * x <= coin.amount <= (1 + tol) * x)
-                        )
-                        self.coin_pool.allocate_coin(fbcoin, vault)
-                        vault.allocate_coin(fbcoin)
-                        logging.debug(
-                            f"    {fbcoin} found with tolerance {tol*100}%, added to"
-                            " fee reserve"
-                        )
-                    except (StopIteration):
-                        logging.debug(
-                            f"    No coin found with amount = {x} with tolerance"
-                            f" {tol*100}%"
-                        )
-                        not_found.append(x)
-                        continue
-                # If there was any failure, try again with a wider tolerance for remaining not found amounts
-                dist = not_found
-                # All coins found with some tolerance
-                if not_found == []:
+        # First optimistically search for coins in the required reserve with
+        # small tolerance.
+        for tol in tolerances:
+            not_found = []
+            for x in dist_req:
+                try:
+                    fbcoin = next(
+                        coin
+                        for coin in self.coin_pool.unallocated_coins()
+                        if ((1 - tol) * x <= coin.amount <= (1 + tol) * x)
+                    )
+                    self.coin_pool.allocate_coin(fbcoin, vault)
+                    vault.allocate_coin(fbcoin)
+                    logging.debug(
+                        f"    {fbcoin} found with tolerance {tol*100}%, added to"
+                        " fee reserve"
+                    )
+                except (StopIteration):
+                    logging.debug(
+                        f"    No coin found with amount = {x} with tolerance"
+                        f" {tol*100}%"
+                    )
+                    not_found.append(x)
+                    continue
+            # If there was any failure, try again with a wider tolerance for
+            # remaining not found amounts
+            dist_req = not_found
+            # All coins found with some tolerance
+            if not_found == []:
+                break
+
+        # If we couldn't find large enough coins close to the dist, complete
+        # with coins off the dist  but make sure they increase the fee at the
+        # worst case feerate.
+        for coin in self.coin_pool.unallocated_coins():
+            if coin.amount >= min_coin_value:
+                self.coin_pool.allocate_coin(coin, vault)
+                vault.allocate_coin(coin)
+                logging.debug(f"    {coin} found to complete")
+                if vault.reserve_balance() >= required_reserve:
                     break
 
-            # FIXME: this implicitly assumes 1.3*Vm < required_reserve
-            diff = required_reserve - vault.reserve_balance()
-            if diff <= 0:
-                break
-            # Now, the values in dist did take into account the coin input fee.
-            # If we are looking on our own outside of the dist we need to account for
-            # it too.
-            reserve_feerate = self._feerate_reserve_per_vault(block_height)
-            fbcoin_cost = int(reserve_feerate * P2WPKH_INPUT_SIZE)
-            # Now handle the remaining requirement, diff
-            available = [
-                coin
-                for coin in self.coin_pool.unallocated_coins()
-                if coin.amount > fbcoin_cost
-            ]
-            if diff > sum(c.amount - fbcoin_cost for c in available):
-                self.coin_pool = coin_pool_copy
-                self.vaults = vaults_copy
-                raise AllocationError(required_reserve, total_unallocated)
-            # sort in increasing order of amount
-            available = sorted(available, key=lambda coin: coin.amount)
-            # Try to fill the remaining requirement with smallest available coin that covers the diff
-            try:
-                fbcoin = next(coin for coin in available if coin.amount - fbcoin_cost >= diff)
-                self.coin_pool.allocate_coin(fbcoin, vault)
-                vault.allocate_coin(fbcoin)
-                logging.debug(
-                    f"    {fbcoin} found to cover remaining requirement and added to"
-                    " fee reserve"
-                )
-                continue
-            # Otherwise, take the largest available coin and repeat
-            except (StopIteration):
-                fbcoin = available[-1]
-                self.coin_pool.allocate_coin(fbcoin, vault)
-                vault.allocate_coin(fbcoin)
-                logging.debug(
-                    f"    {fbcoin} found as largest available and added to fee reserve"
-                )
-                continue
+        assert (
+            vault.reserve_balance() >= required_reserve
+        ), f"Was checked before searching, {vault.reserve_balance()} vs {required_reserve}"
 
-        new_reserve_total = vault.reserve_balance()
-        assert new_reserve_total >= required_reserve
+        # Now we have enough coins for the required reserve we can look for
+        # coins in the bonus reserve
+        for x in dist_bonus:
+            for coin in self.coin_pool.unallocated_coins():
+                if x * 0.85 <= coin.amount <= x * 1.15:
+                    self.coin_pool.allocate_coin(coin, vault)
+                    vault.allocate_coin(coin)
+                    break
+
         logging.debug(
             f"    Reserve for vault {vault.id} has excess of"
-            f" {new_reserve_total-required_reserve}"
+            f" {vault.reserve_balance() - required_reserve}"
         )
-
         # Successful new delegation and allocation!
         self.vaults[vault.id] = vault
 
@@ -992,6 +1018,7 @@ class StateMachine:
         max_paying_combination = None
         max_fee_added = 0
         allocated_coins = vault.allocated_coins()
+        print(allocated_coins)
         for candidate in itertools.chain.from_iterable(
             itertools.combinations(allocated_coins, r)
             for r in range(1, len(allocated_coins) + 1)
@@ -1080,28 +1107,29 @@ class StateMachine:
         """
         self.remove_vault(self.vaults[vault_id])
 
-    def risk_status(self, block_height):
-        """Return a summary of the risk status for the set of vaults being watched."""
-        # For cancel
-        under_requirement = []
-        for _, vault in self.vaults:
-            y = self.under_requirement(vault, block_height)
-            if y != 0:
-                under_requirement.append(y)
-        # For delegation
-        available = self.coin_pool.unallocated_coins()
-        delegation_requires = sum(self.fb_coins_dist(block_height)) - sum(
-            [coin.amount for coin in available]
-        )
-        if delegation_requires < 0:
-            delegation_requires = 0
-        return {
-            "block": block_height,
-            "num_vaults": len(self.vaults),
-            "vaults_at_risk": len(under_requirement),
-            "severity": sum(under_requirement),
-            "delegation_requires": delegation_requires,
-        }
+    # TODO: re-think or get rid of
+    # def risk_status(self, block_height):
+    # """Return a summary of the risk status for the set of vaults being watched."""
+    # # For cancel
+    # under_requirement = []
+    # for _, vault in self.vaults:
+    # y = self.under_requirement(vault, block_height)
+    # if y != 0:
+    # under_requirement.append(y)
+    # # For delegation
+    # available = self.coin_pool.unallocated_coins()
+    # delegation_requires = sum(self.fb_coins_dist(block_height)) - sum(
+    # [coin.amount for coin in available]
+    # )
+    # if delegation_requires < 0:
+    # delegation_requires = 0
+    # return {
+    # "block": block_height,
+    # "num_vaults": len(self.vaults),
+    # "vaults_at_risk": len(under_requirement),
+    # "severity": sum(under_requirement),
+    # "delegation_requires": delegation_requires,
+    # }
 
 
 # FIXME: eventually have some small pytests
