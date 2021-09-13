@@ -899,11 +899,7 @@ class StateMachine:
         If this fee is unsuccessful at pushing the cancel through, additional small coins may
         be added from the fee_reserve.
         """
-        vault = next(
-            (vault for vault in self.list_vaults() if vault.id == vault_id), None
-        )
-        if vault is None:
-            raise RuntimeError(f"No vault found with id {vault_id}")
+        vault = self.vaults[vault_id]
         # FIXME: i think this doesn't hold
         assert vault.is_available(), "FIXME"
 
