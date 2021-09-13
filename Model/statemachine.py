@@ -279,19 +279,20 @@ class StateMachine:
             self.vaults[vault_id].deallocate_coin(coin)
         self.coin_pool.remove_coin(coin)
 
-    def remove_coins(self, f):
-        """Remove all coins from the pool for which {f()} returns True.
-
-        Returns the removed coins.
-        """
-        removed_coins = []
+    def grab_coins(self, f):
+        """Grab coins from the pool according to a filter."""
+        coins = []
 
         for coin in list(self.coin_pool.list_coins()):
             if f(coin):
-                removed_coins.append(coin)
-                self.remove_coin(coin)
+                coins.append(coin)
 
-        return removed_coins
+        return coins
+
+    def remove_coins(self, coins):
+        """Remove all these coins from the pool."""
+        for c in coins:
+            self.remove_coin(c)
 
     def remove_vault(self, vault):
         for coin in vault.allocated_coins():
@@ -538,7 +539,7 @@ class StateMachine:
 
         This version grabs all the existing feebump coins.
         """
-        return self.remove_coins(lambda _: True)
+        return self.coin_pool.list_coins()
 
     def grab_coins_1(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -547,7 +548,7 @@ class StateMachine:
         This version grabs all the coins that either haven't been processed yet
         or are negligible.
         """
-        return self.remove_coins(
+        return self.grab_coins(
             lambda coin: not coin.is_unconfirmed()
             and (coin.is_unprocessed() or self.is_negligible(coin, block_height))
         )
@@ -585,7 +586,7 @@ class StateMachine:
 
             return False
 
-        return self.remove_coins(coin_filter)
+        return self.grab_coins(coin_filter)
 
     def grab_coins_3(self, height):
         """Select coins to consume as inputs of the CF transaction.
@@ -611,7 +612,7 @@ class StateMachine:
 
             return False
 
-        return self.remove_coins(coin_filter)
+        return self.grab_coins(coin_filter)
 
     def min_fbcoin_value(self, height):
         """The absolute minimum value for a feebumping coin.
@@ -650,9 +651,6 @@ class StateMachine:
 
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
-        # FIXME: don't copy...
-        coin_pool_copy = deepcopy(self.coin_pool)
-        vaults_copy = deepcopy(self.vaults)
         # Set target values for our coin creation amounts
         dist_reserve = self.coins_dist_reserve(block_height)
         dist_bonus = self.coins_dist_bonus(block_height)
@@ -732,8 +730,6 @@ class StateMachine:
             )
             # Not enough in available coins to fanout to 1 complete fee_reserve, so
             # return 0 (as in, 0 fee paid)
-            self.coin_pool = coin_pool_copy
-            self.vaults = vaults_copy
             return 0
 
         remainder = (
@@ -776,6 +772,7 @@ class StateMachine:
                 for coin in added_coins:
                     coin.increase_amount(increase)
 
+        self.remove_coins(coins)
         self.mempool.append(ConsolidateFanoutTx(block_height, coins, added_coins))
         return cf_tx_fee
 
