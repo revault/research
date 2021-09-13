@@ -195,8 +195,9 @@ class CoinPool:
         processing_state=ProcessingState.UNPROCESSED,
         fan_block=None,
         allocated_vault_id=None,
+        coin_id=None,
     ):
-        coin_id = self.new_coin_id()
+        coin_id = coin_id if coin_id is not None else self.new_coin_id()
         self.coins[coin_id] = FeebumpCoin(coin_id, amount, processing_state, fan_block)
         if allocated_vault_id is not None:
             assert isinstance(allocated_vault_id, int)
@@ -524,9 +525,23 @@ class StateMachine:
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
-        This version grabs all the existing feebump coins.
+        This version grabs all the feebump coins available.
         """
-        return self.coin_pool.list_coins()
+
+        def coin_filter(coin):
+            if coin.is_unconfirmed():
+                return False
+
+            if (
+                self.coin_pool.is_allocated(coin)
+                and self.vaults[self.coin_pool.coin_allocation(coin)].status
+                != VaultState.READY
+            ):
+                return False
+
+            return True
+
+        return self.grab_coins(coin_filter)
 
     def grab_coins_1(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
@@ -996,7 +1011,6 @@ class StateMachine:
         max_paying_combination = None
         max_fee_added = 0
         allocated_coins = vault.allocated_coins()
-        print(allocated_coins)
         for candidate in itertools.chain.from_iterable(
             itertools.combinations(allocated_coins, r)
             for r in range(1, len(allocated_coins) + 1)
