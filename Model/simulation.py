@@ -927,6 +927,7 @@ if __name__ == "__main__":
         o_version=1,
         i_version=2,
         allocate_version=1,
+        cancel_coin_selec=0,
         exp_active_vaults=5,
         refill_excess=4 * 5,
         refill_period=1008,
@@ -951,4 +952,4 @@ if __name__ == "__main__":
     sim.run(start_block, end_block)
     sim.plot_frpv(start_block, end_block, show=True)
     # sim.plot_fee_history(start_block, end_block, show=True)
-    # sim.plot_fee_estimate("95Q1", start_block, end_block, show=True)
+    # sim.plot_fee_estimate("85Q1H", start_block, end_block, show=True)

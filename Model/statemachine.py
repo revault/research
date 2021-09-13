@@ -260,6 +260,51 @@ class StateMachine:
         self.Vm_cache = (None, None)  # block, value
         self.feerate = (None, None)  # block, value
 
+        # Prepare the rolling stats
+        thirty_days = 144 * 30
+        ninety_days = 144 * 90
+        self.hist_df["85Q1H"] = (
+            self.hist_df["mean_feerate"]
+            .rolling(6, min_periods=1)
+            .quantile(quantile=0.85, interpolation="linear")
+        )
+        if self.estimate_strat == "MA30":
+            self.hist_df["MA30"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(thirty_days, min_periods=144)
+                .mean()
+            )
+        elif self.estimate_strat == "ME30":
+            self.hist_df["ME30"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(thirty_days, min_periods=144)
+                .median()
+            )
+        elif self.estimate_strat != "85Q1H":
+            raise ValueError("Estimate strategy not implemented")
+
+        if self.reserve_strat == "95Q30":
+            self.hist_df["95Q30"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(thirty_days, min_periods=144)
+                .quantile(quantile=0.95, interpolation="linear")
+            )
+        elif self.reserve_strat == "95Q90":
+            self.hist_df["95Q90"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(ninety_days, min_periods=144)
+                .quantile(quantile=0.95, interpolation="linear")
+            )
+        elif self.reserve_strat == "CUMMAX95Q90":
+            self.hist_df["CUMMAX95Q90"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(ninety_days, min_periods=144)
+                .quantile(quantile=0.95, interpolation="linear")
+                .cummax()
+            )
+        else:
+            raise ValueError("Reserve strategy not implemented")
+
     def list_vaults(self):
         return list(self.vaults.values())
 
@@ -309,31 +354,6 @@ class StateMachine:
         if self.frpv[0] == block_height:
             return self.frpv[1]
 
-        thirtyD = 144 * 30  # 30 days in blocks
-        ninetyD = 144 * 90  # 90 days in blocks
-        if self.reserve_strat not in self.hist_df:
-            if self.reserve_strat == "95Q30":
-                self.hist_df["95Q30"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(thirtyD, min_periods=144)
-                    .quantile(quantile=0.95, interpolation="linear")
-                )
-            elif self.reserve_strat == "95Q90":
-                self.hist_df["95Q90"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(ninetyD, min_periods=144)
-                    .quantile(quantile=0.95, interpolation="linear")
-                )
-            elif self.reserve_strat == "CUMMAX95Q90":
-                self.hist_df["CUMMAX95Q90"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(ninetyD, min_periods=144)
-                    .quantile(quantile=0.95, interpolation="linear")
-                    .cummax()
-                )
-            else:
-                raise ValueError("Strategy not implemented")
-
         self.frpv = (block_height, self.hist_df[self.reserve_strat][block_height])
         return self.frpv[1]
 
@@ -344,32 +364,6 @@ class StateMachine:
         """
         if self.feerate[0] == block_height:
             return self.feerate[1]
-
-        thirtyD = 144 * 30  # 30 days in blocks
-        if self.estimate_strat not in self.hist_df:
-            if self.estimate_strat == "MA30":
-                self.hist_df["MA30"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(thirtyD, min_periods=144)
-                    .mean()
-                )
-
-            elif self.estimate_strat == "ME30":
-                self.hist_df["ME30"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(thirtyD, min_periods=144)
-                    .median()
-                )
-
-            elif self.estimate_strat == "95Q1":
-                self.hist_df["95Q1"] = (
-                    self.hist_df["mean_feerate"]
-                    .rolling(144, min_periods=72)
-                    .quantile(quantile=0.95, interpolation="linear")
-                )
-
-            else:
-                raise ValueError("Strategy not implemented")
 
         self.feerate = (block_height, self.hist_df[self.estimate_strat][block_height])
         return self.feerate[1]
@@ -383,17 +377,7 @@ class StateMachine:
         try:
             return int(self.hist_df["est_1block"][height])
         except ValueError:
-            try:
-                # FIXME: we can do better than that.
-                return int(
-                    max(
-                        self.hist_df["mean_feerate"][h]
-                        for h in range(height - 2, height + 1)
-                    )
-                )
-            except ValueError:
-                # Mean feerate might be NA if there was no tx in this block
-                return 0
+            return int(self.hist_df["85Q1H"][height])
 
     def cancel_vbytes(self):
         """Size of the Cancel transaction without any feebump input"""
