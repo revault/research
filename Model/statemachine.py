@@ -317,6 +317,10 @@ class StateMachine:
     def unconfirmed_transactions(self):
         return self.mempool
 
+    def allocate_coin(self, coin, vault):
+        self.coin_pool.allocate_coin(coin, vault)
+        vault.allocate_coin(coin)
+
     def remove_coin(self, coin):
         if self.coin_pool.is_allocated(coin):
             vault_id = self.coin_pool.coin_allocation(coin)
@@ -799,7 +803,7 @@ class StateMachine:
 
         # We only require to allocate up to the required reserve, the rest is a bonus
         # to avoid overpayments.
-        usable = [] if not remove_vault else vault.allocated_coins
+        usable = [] if not remove_vault else list(vault.allocated_coins())
         usable += [
             c.amount
             for c in self.coin_pool.unallocated_coins()
@@ -833,8 +837,7 @@ class StateMachine:
                         for coin in self.coin_pool.unallocated_coins()
                         if ((1 - tol) * x <= coin.amount <= (1 + tol) * x)
                     )
-                    self.coin_pool.allocate_coin(fbcoin, vault)
-                    vault.allocate_coin(fbcoin)
+                    self.allocate_coin(fbcoin, vault)
                     logging.debug(
                         f"    {fbcoin} found with tolerance {tol*100}%, added to"
                         " fee reserve"
@@ -858,8 +861,7 @@ class StateMachine:
         # worst case feerate.
         for coin in self.coin_pool.unallocated_coins():
             if coin.amount >= min_coin_value:
-                self.coin_pool.allocate_coin(coin, vault)
-                vault.allocate_coin(coin)
+                self.allocate_coin(coin, vault)
                 logging.debug(f"    {coin} found to complete")
                 if vault.reserve_balance() >= required_reserve:
                     break
@@ -873,8 +875,7 @@ class StateMachine:
         for x in dist_bonus:
             for coin in self.coin_pool.unallocated_coins():
                 if x * 0.85 <= coin.amount <= x * 1.15:
-                    self.coin_pool.allocate_coin(coin, vault)
-                    vault.allocate_coin(coin)
+                    self.allocate_coin(coin, vault)
                     break
 
         logging.debug(
@@ -1062,7 +1063,7 @@ class StateMachine:
                 self.coin_pool.add_coin(
                     coin.amount, coin.processing_state, coin.fan_block, vault.id
                 )
-                self.coin_pool.allocate_coin(coin, vault)
+                self.allocate_coin(coin, vault)
             self.mempool.remove(tx)
 
             # Push a new tx with coins selected to meet the new fee
