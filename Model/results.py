@@ -10,6 +10,7 @@ from simulation import Simulation
 
 
 def sim_process(prng_seed, val=None, study_type=None, config_map=None):
+    logging.basicConfig(level=logging.INFO)
     req_types = [
         "N_STK",
         "N_MAN",
@@ -60,7 +61,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
     results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
     os.makedirs(results_dir, exist_ok=True)
     fname = os.path.join(results_dir, f"{study_type}-{val}-Report-{prng_seed}")
-    start_block = 200000
+    start_block = 350000
     end_block = 681000
     random.seed(prng_seed)
     sim = Simulation(
@@ -141,7 +142,8 @@ if __name__ == "__main__":
     study_type = "O_VERSION"
     val_range = [0, 1]
     sim_repeats = 10
-    cores = 8
+    cores = 10
+
     report_name = f"study-{study_type}"
     range_seed = list(range(21000000, 21000000 + cores))
 
