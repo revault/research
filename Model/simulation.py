@@ -150,9 +150,9 @@ class Simulation(object):
 
     def required_reserve(self, block_height):
         """The amount the WT should have in reserve based on the number of active vaults"""
-        required_reserve_per_vault = self.wt.fee_reserve_per_vault(block_height)
+        required_reserve = sum(self.wt.coins_dist_reserve(block_height))
         num_vaults = len(self.wt.list_vaults())
-        return num_vaults * required_reserve_per_vault
+        return num_vaults * required_reserve
 
     def amount_needed(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
@@ -225,11 +225,14 @@ class Simulation(object):
 
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
-            self.cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
+            cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
             logging.info(
                 f"  Consolidate-fanout transition at block {block_height} with fee:"
-                f" {self.cf_fee}"
+                f" {cf_fee}"
             )
+            if self.cf_fee is None:
+                self.cf_fee = 0
+            self.cf_fee += cf_fee
 
             # snapshot coin pool after CF Tx confirmation
             if self.with_coin_pool:
@@ -361,7 +364,14 @@ class Simulation(object):
                 self.wt.finalize_consolidate_fanout(tx, height)
                 self.top_up_sequence(height)
                 if tx.txouts[-1].processing_state == ProcessingState.UNPROCESSED:
-                    self.wt.broadcast_consolidate_fanout(height)
+                    cf_fee = self.wt.broadcast_consolidate_fanout(height)
+                    logging.info(
+                        f"  Second Consolidate-fanout transition at block {height} with fee:"
+                        f" {cf_fee}"
+                    )
+                    if self.cf_fee is None:
+                        self.cf_fee = 0
+                    self.cf_fee += cf_fee
             elif isinstance(tx, CancelTx):
                 self.wt.finalize_cancel(tx, height)
             else:
