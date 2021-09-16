@@ -152,10 +152,9 @@ class Simulation(object):
 
     def amount_needed(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
-        Used by stakeholder wallet software.
-        R(t) in the paper.
+        Used by stakeholder wallet software. R(t, E) in the paper.
 
-        Note: stakeholder knows WT's balance and num_vaults (or expected_active_vaults).
+        Note: stakeholder knows WT's balance, num_vaults, fb_coins_dist.
               Stakeholder doesn't know which coins are allocated or not.
         """
         bal = self.wt.balance()
@@ -183,14 +182,14 @@ class Simulation(object):
         return int(R)
 
     def _reserve_divergence(self, block_height):
+        """Compute how far the vault's reserves have divereged from the current fee reserve per vault."""
         vaults = self.wt.list_available_vaults()
         if vaults != []:
             divergence = []
-            frpv = self.wt.fee_reserve_per_vault(block_height)
+            required_reserve = sum(self.wt.coins_dist_reserve(block_height))
             for vault in vaults:
-                div = vault.reserve_balance() - frpv
+                div = vault.reserve_balance() - required_reserve
                 divergence.append(div)
-            # block, mean div, min div, max div
             self.divergence.append(
                 [
                     block_height,
@@ -276,14 +275,15 @@ class Simulation(object):
                     f"  Allocation transition FAILED for vault {vault.id}: {str(e)}"
                 )
 
-    def spend_sequence(self, block_height):
-        logging.info(f"Spend sequence at block {block_height}")
+    def spend(self, block_height):
         if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
         vault_id = random.choice(self.wt.list_available_vaults()).id
         # Spend transition
-        logging.info(f"  Spend transition at block {block_height}")
+        logging.info(
+            f"  Spend transition with vault {vault_id} at block {block_height}"
+        )
         self.wt.spend(vault_id, block_height)
 
         # snapshot coin pool after spend attempt
@@ -291,8 +291,8 @@ class Simulation(object):
             amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_spend.append([block_height, amounts])
 
-    def cancel_sequence(self, block_height):
-        logging.info(f"Cancel sequence at block {block_height}")
+    def cancel(self, block_height):
+        logging.info(f"Cancel at block {block_height}")
         if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
@@ -421,13 +421,13 @@ class Simulation(object):
                 # generate invalid spend, requires cancel
                 if random.random() < self.invalid_spend_rate:
                     try:
-                        self.cancel_sequence(block)
+                        self.cancel(block)
                     except NoVaultToSpend:
                         logging.info("Failed to Cancel, no vault to spend")
                 # generate valid spend, requires processing
                 else:
                     try:
-                        self.spend_sequence(block)
+                        self.spend(block)
                     except NoVaultToSpend:
                         logging.info("Failed to Spend, no vault to spend")
 

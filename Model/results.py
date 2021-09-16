@@ -97,7 +97,6 @@ def multiprocess_run(range_seed, val, study_type, config_map):
     # FIXME: what if process fails?
     assert len(range_seed) >= 2
     cores = len(range_seed)
-    # Todo, change the prng for each worker
     with mp.Pool(processes=cores) as pool:
         dfs = pool.map(
             partial(sim_process, val=val, study_type=study_type, config_map=config_map),

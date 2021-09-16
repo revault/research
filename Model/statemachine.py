@@ -844,11 +844,7 @@ class StateMachine:
         ]
         total_usable = sum(usable)
         required_reserve = sum(dist_req)
-        logging.debug(
-            f"    Fee Reserve per Vault: {required_reserve}, "
-            f"Usable unallocated coins amounts: {usable} "
-            f"Unallocated coins: {self.coin_pool.unallocated_coins()}"
-        )
+
         if required_reserve > total_usable:
             raise AllocationError(required_reserve, total_usable)
         if remove_vault:
@@ -873,7 +869,7 @@ class StateMachine:
                     self.allocate_coin(fbcoin, vault)
                     logging.debug(
                         f"    {fbcoin} found with tolerance {tol*100}%, added to"
-                        " fee reserve. Distribution value: {x}"
+                        f" fee reserve. Distribution value: {x}"
                     )
                 except (StopIteration):
                     logging.debug(
@@ -927,30 +923,6 @@ class StateMachine:
 
         feerate = self.next_block_feerate(block_height)
         needed_fee = self.cancel_tx_fee(feerate, 0)
-
-        # FIXME: should we dropt that??
-        # Strat 1: randomly select coins until the fee is met
-        # Performs moderately bad in low-stable fee market and ok in volatile fee market
-        # while init_fee > 0:
-        #     coin = choice(vault['fee_reserve'])
-        #     init_fee -= coin['amount']
-        #     cancel_fb_inputs.append(coin)
-        #     vault['fee_reserve'].remove(coin)
-        #     self.fbcoins.remove(coin)
-        #     if vault['fee_reserve'] == []:
-        #         raise RuntimeError(f"Fee reserve for vault {vault['id']} was insufficient to process cancel tx")
-
-        # Strat 2: select smallest coins first
-        # FIXME: Performs bad in low-stable feemarket and good in volatile fee market
-        # while init_fee > 0:
-        # smallest_coin = min(
-        #     vault['fee_reserve'], key=lambda coin: coin['amount'])
-        # cancel_fb_inputs.append(smallest_coin)
-        # vault['fee_reserve'].remove(smallest_coin)
-        # self.fbcoins.remove(smallest_coin)
-        # init_fee -= smallest_coin['amount']
-        # if vault['fee_reserve'] == []:
-        #     raise RuntimeError(f"Fee reserve for vault {vault['id']} was insufficient to process cancel tx")
 
         cancel_fb_inputs = []
         if self.cancel_coin_selection == 0:
@@ -1123,30 +1095,6 @@ class StateMachine:
         we are interested in (it does not affect the availability of feebump coins).
         """
         self.remove_vault(self.vaults[vault_id])
-
-    # TODO: re-think or get rid of
-    # def risk_status(self, block_height):
-    # """Return a summary of the risk status for the set of vaults being watched."""
-    # # For cancel
-    # under_requirement = []
-    # for _, vault in self.vaults:
-    # y = self.under_requirement(vault, block_height)
-    # if y != 0:
-    # under_requirement.append(y)
-    # # For delegation
-    # available = self.coin_pool.unallocated_coins()
-    # delegation_requires = sum(self.fb_coins_dist(block_height)) - sum(
-    # [coin.amount for coin in available]
-    # )
-    # if delegation_requires < 0:
-    # delegation_requires = 0
-    # return {
-    # "block": block_height,
-    # "num_vaults": len(self.vaults),
-    # "vaults_at_risk": len(under_requirement),
-    # "severity": sum(under_requirement),
-    # "delegation_requires": delegation_requires,
-    # }
 
 
 # FIXME: eventually have some small pytests
