@@ -1,11 +1,8 @@
 """ 
 TODO:
-* simulate requirement for cancel feebump, then implement feebump algo
 * Add random time interval between balance low and re-fill trigger (to simulate slow stakeholder),
   to investigate time-at-risk. 
-* Make good documentation
-* Remove possibility for inconsistencies in progress of blocks with WTSim   
-    - could break with certain DELEGATION_PERIODs. 
+* Make good documentation 
 """
 
 import itertools
@@ -114,7 +111,10 @@ class FeebumpCoin:
         self.fan_block = fan_block
 
     def __repr__(self):
-        return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block}, state={self.processing_state})"
+        return (
+            f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block},"
+            f" state={self.processing_state})"
+        )
 
     def is_confirmed(self):
         """Whether this coin was fanned out and confirmed"""
@@ -906,8 +906,7 @@ class StateMachine:
                     )
                 except (StopIteration):
                     logging.debug(
-                        f"    No coin found with amount = {x} with tolerance"
-                        f" {tol*100}%"
+                        f"    No coin found with amount = {x} with tolerance {tol*100}%"
                     )
                     not_found.append(x)
                     continue
@@ -928,9 +927,10 @@ class StateMachine:
                 if vault.reserve_balance() >= required_reserve:
                     break
 
-        assert (
-            vault.reserve_balance() >= required_reserve
-        ), f"Was checked before searching, {vault.reserve_balance()} vs {required_reserve}"
+        assert vault.reserve_balance() >= required_reserve, (
+            f"Was checked before searching, {vault.reserve_balance()} vs"
+            f" {required_reserve}"
+        )
 
         # Now we have enough coins for the required reserve we can look for
         # coins in the bonus reserve
@@ -1038,8 +1038,8 @@ class StateMachine:
                 fbcoin = reserve[-1]
                 if fbcoin.amount <= fbcoin_cost + self.cancel_tx_fee(feerate, 0):
                     logging.error(
-                        f"Not enough coins to cover for the Cancel fee of "
-                        f"{needed_fee} at feerate {feerate}. Collected {collected_fee} sats."
+                        f"Not enough coins to cover for the Cancel fee of {needed_fee}"
+                        f" at feerate {feerate}. Collected {collected_fee} sats."
                     )
                     break
                 self.remove_coin(fbcoin)

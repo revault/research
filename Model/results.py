@@ -26,11 +26,12 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         "SPEND_RATE",
         "INVALID_SPEND_RATE",
         "CATASTROPHE_RATE",
+        "DELEGATE_RATE",
     ]
     if study_type not in req_types:
         logging.error(
             "Study requires a type from: EXPECTED_ACTIVE_VAULTS,"
-            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, DELEGATION_PERIOD,"
+            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, DELEGATE_RATE, SPEND_RATE,"
             " INVALID_SPEND_RATE, CATASTROPHE_RATE, N_STK, N_MAN, HIST_CSV,"
             " RESERVE_STRAT, ESTIMATE_STRAT, O_VERSION, I_VERSION, ALLOCATE_VERSION."
         )
@@ -53,6 +54,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
             SPEND_RATE = {config_map["SPEND_RATE"]}
             INVALID_SPEND_RATE = {config_map["INVALID_SPEND_RATE"]}
             CATASTROPHE_RATE = {config_map["CATASTROPHE_RATE"]}
+            DELEGATE_RATE = {config_map["DELEGATE_RATE"]}
         """
     )
 
@@ -81,6 +83,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         int(config_map["SPEND_RATE"]),
         float(config_map["INVALID_SPEND_RATE"]),
         float(config_map["CATASTROPHE_RATE"]),
+        float(config_map["DELEGATE_RATE"]),
         with_balance=True,
         with_divergence=True,
         with_cum_op_cost=True,
@@ -126,21 +129,22 @@ if __name__ == "__main__":
         "HIST_CSV": "../block_fees/historical_fees.csv",
         "RESERVE_STRAT": "CUMMAX95Q90",
         "ESTIMATE_STRAT": "ME30",
-        "O_VERSION": 1,
+        "O_VERSION": 0,
         "I_VERSION": 2,
         "ALLOCATE_VERSION": 0,
+        "CANCEL_COIN_SELECTION": 0,
         "EXPECTED_ACTIVE_VAULTS": 5,
         "REFILL_PERIOD": 144 * 7,
         "REFILL_EXCESS": 5,
         "SPEND_RATE": 1,
         "INVALID_SPEND_RATE": 0.1,
         "CATASTROPHE_RATE": 0.005,
-        "CANCEL_COIN_SELECTION": 0,
+        "DELEGATE_RATE": 1,
     }
 
     # Set the study parameters
-    study_type = "O_VERSION"
-    val_range = [0, 1]
+    study_type = "REFILL_EXCESS"
+    val_range = [0, 0.5, 1, 1.5, 2]
     sim_repeats = 10
     cores = 10
 
