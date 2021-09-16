@@ -1,8 +1,3 @@
-"""
-TODO:
-Update sequences to handle transaction broadcast & finalize. 
-"""
-
 import logging
 import random
 
@@ -45,6 +40,8 @@ class Simulation(object):
         unvault_rate,
         invalid_spend_rate,
         catastrophe_rate,
+        delegate_rate,
+        with_scale_fixed=True,
         with_balance=False,
         with_divergence=False,
         with_op_cost=False,
@@ -61,6 +58,7 @@ class Simulation(object):
         self.refill_excess = refill_excess
         self.refill_period = refill_period
         self.unvault_rate = unvault_rate
+        self.delegate_rate = delegate_rate
 
         # Manager parameters
         self.invalid_spend_rate = invalid_spend_rate
@@ -105,6 +103,7 @@ class Simulation(object):
         self.fb_coins_dist = []
         self.vm_values = []
         self.vb_values = []
+        self.scale_fixed = with_scale_fixed
 
         # Simulation report
         self.delegation_failures = 0
@@ -374,8 +373,8 @@ class Simulation(object):
                 if tx.txouts[-1].processing_state == ProcessingState.UNPROCESSED:
                     cf_fee = self.wt.broadcast_consolidate_fanout(height)
                     logging.info(
-                        f"  Second Consolidate-fanout transition at block {height} with fee:"
-                        f" {cf_fee}"
+                        f"  Second Consolidate-fanout transition at block {height} with"
+                        f" fee: {cf_fee}"
                     )
                     if self.cf_fee is None:
                         self.cf_fee = 0
@@ -409,27 +408,35 @@ class Simulation(object):
             # First of all, was any transaction confirmed in this block?
             self.confirm_sequence(block)
 
-            # We always try to keep the number of expected vaults under watch. We might
-            # not be able to allocate if a CF tx is pending but not yet confirmed.
-            for i in range(len(self.wt.list_vaults()), self.num_vaults):
-                amount = int(10e10)  # 100 BTC
-                try:
-                    self.wt.allocate(self.new_vault_id(), amount, block)
-                except AllocationError as e:
-                    logging.error(
-                        f"Not enough funds to allocate all the expected vaults at block {block}: {str(e)}"
-                    )
-                    # FIXME: should we break?
-                    break
-                self.vault_count += 1
+            if self.scale_fixed:
+                # We always try to keep the number of expected vaults under watch. We might
+                # not be able to allocate if a CF tx is pending but not yet confirmed.
+                for i in range(len(self.wt.list_vaults()), self.num_vaults):
+                    amount = int(10e10)  # 100 BTC
+                    try:
+                        self.wt.allocate(self.new_vault_id(), amount, block)
+                    except AllocationError as e:
+                        logging.error(
+                            "Not enough funds to allocate all the expected vaults at"
+                            f" block {block}: {str(e)}"
+                        )
+                        break
+                    self.vault_count += 1
 
             # Refill once per refill period
             if block % self.refill_period == 0:
                 self.refill_sequence(block, 0)
 
-            # The unvault rate is a rate per day
+            # The delegate rate is per day
+            if not self.scale_fixed:
+                if random.random() < self.delegate_rate / BLOCKS_PER_DAY:
+                    self.delegate_sequence(block)
+
+            # The spend rate is a rate per day
             if random.random() < self.unvault_rate / BLOCKS_PER_DAY:
-                self.delegate_sequence(block)
+                if self.scale_fixed:
+                    self.delegate_sequence(block)
+
                 # generate invalid spend, requires cancel
                 if random.random() < self.invalid_spend_rate:
                     try:
@@ -865,8 +872,14 @@ class Simulation(object):
             plot_num += 1
 
         # Report confirmation tracking
-        report += f"Max confirmation time for a Cancel Tx: {self.report_df['max_cancel_conf_time'][0]}\n"
-        report += f"Max confirmation time for a Consolidate-fanout Tx: {self.report_df['max_cf_conf_time'][0]}\n"
+        report += (
+            "Max confirmation time for a Cancel Tx:"
+            f" {self.report_df['max_cancel_conf_time'][0]}\n"
+        )
+        report += (
+            "Max confirmation time for a Consolidate-fanout Tx:"
+            f" {self.report_df['max_cf_conf_time'][0]}\n"
+        )
 
         if output is not None:
             plt.savefig(f"{output}.png")
@@ -970,6 +983,8 @@ if __name__ == "__main__":
         unvault_rate=1,
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
+        delegate_rate=1,
+        with_scale_fixed=True,
         with_balance=True,
         with_divergence=True,
         with_op_cost=False,
@@ -982,7 +997,7 @@ if __name__ == "__main__":
         with_fb_coins_dist=False,
     )
 
-    start_block = 200000
+    start_block = 350000
     end_block = 680000
 
     sim.run(start_block, end_block)

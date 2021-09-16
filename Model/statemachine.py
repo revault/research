@@ -1,11 +1,8 @@
 """ 
 TODO:
-* simulate requirement for cancel feebump, then implement feebump algo
 * Add random time interval between balance low and re-fill trigger (to simulate slow stakeholder),
   to investigate time-at-risk. 
-* Make good documentation
-* Remove possibility for inconsistencies in progress of blocks with WTSim   
-    - could break with certain DELEGATION_PERIODs. 
+* Make good documentation 
 """
 
 import bisect
