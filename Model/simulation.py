@@ -886,41 +886,28 @@ class Simulation(object):
         if show:
             plt.show()
 
-        self.report_df["delegation_failure_count"][0] = self.delegation_failures
-        self.report_df["delegation_failure_rate"][0] = (
-            self.delegation_failures / self.delegation_successes
-        )
-        report += (
-            f"Delegation failures: {self.delegation_failures} /"
-            f" {self.delegation_successes}"
-            f" ({self.delegation_failures / self.delegation_successes * 100}%)\n"
-        )
+        if self.delegation_failures > 0 or self.delegation_successes > 0:
+            self.report_df["delegation_failure_count"][0] = self.delegation_failures
+            self.report_df["delegation_failure_rate"][0] = self.delegation_failures / (
+                self.delegation_successes + self.delegation_failures
+            )
+
+            self.report_df["delegation_failure_rate"][0] = None
+            report += (
+                f"Delegation failures: {self.delegation_failures} /"
+                f" { (self.delegation_successes + self.delegation_failures)}"
+                f" ({(self.delegation_failures /  (self.delegation_successes + self.delegation_failures) )* 100}%)\n"
+            )
 
         return (report, self.report_df)
 
     def plot_fee_history(self, start_block, end_block, output=None, show=False):
 
         plt.style.use(["plot_style.txt"])
-        subplots_len = 3
-        fig, axes = plt.subplots(
-            subplots_len, 1, sharex=True, figsize=(5.4, subplots_len * 3.9)
-        )
-        self.wt.hist_df["mean_feerate"][start_block:end_block].plot(ax=axes[0])
-        self.wt.hist_df["min_feerate"][start_block:end_block].plot(
-            ax=axes[1], legend=True
-        )
-        self.wt.hist_df["max_feerate"][start_block:end_block].plot(
-            ax=axes[2], legend=True
-        )
-        axes[0].set_title("Mean Fee Rate")
-        axes[0].set_ylabel("Satoshis", labelpad=15)
-        axes[0].set_xlabel("Block", labelpad=15)
-        axes[1].set_title("Min Fee Rate")
-        axes[1].set_ylabel("Satoshis", labelpad=15)
-        axes[1].set_xlabel("Block", labelpad=15)
-        axes[2].set_title("Max Fee Rate")
-        axes[2].set_ylabel("Satoshis", labelpad=15)
-        axes[2].set_xlabel("Block", labelpad=15)
+        fig, axes = plt.subplots(1, 1, figsize=(5.4, 3.9))
+        self.wt.hist_df["mean_feerate"][start_block:end_block].plot(color="black")
+        axes.set_ylabel("Satoshis per Weight Unit", labelpad=15)
+        axes.set_xlabel("Block", labelpad=15)
 
         if output is not None:
             plt.savefig(f"{output}.png")
@@ -1015,5 +1002,5 @@ if __name__ == "__main__":
     sim.run(start_block, end_block)
     (rep, df) = sim.plot(show=False)
     # sim.plot_frpv(start_block, end_block, show=True)
-    # sim.plot_fee_history(start_block, end_block, show=True)
+    # sim.plot_fee_history(start_block, end_block, output="fee_history")
     # sim.plot_fee_estimate("85Q1H", start_block, end_block, show=True)
