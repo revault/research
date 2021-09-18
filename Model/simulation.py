@@ -366,6 +366,9 @@ class Simulation(object):
                     + TX_OVERHEAD_SIZE
                     <= MAX_TX_SIZE
                 )
+                logging.debug(
+                    f"  Consolidate-fanout confirm transition at block {height}"
+                )
                 self.wt.finalize_consolidate_fanout(tx, height)
                 self.top_up_sequence(height)
                 if tx.txouts[-1].processing_state == ProcessingState.UNPROCESSED:
@@ -378,6 +381,7 @@ class Simulation(object):
                         self.cf_fee = 0
                     self.cf_fee += cf_fee
             elif isinstance(tx, CancelTx):
+                logging.debug(f"  Cancel confirm transition at block {height}")
                 self.wt.finalize_cancel(tx, height)
             else:
                 raise
@@ -564,13 +568,13 @@ class Simulation(object):
         if self.with_balance and self.balances != []:
             bal_df = DataFrame(
                 self.balances,
-                columns=["block", "balance", "required reserve", "unallocated balance"],
+                columns=["block", "Balance", "Required Reserve", "Unallocated Balance"],
             )
             bal_df.set_index(["block"], inplace=True)
             bal_df.plot(ax=axes[plot_num], title="WT Balance", legend=True)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
-            self.report_df["mean_balance"] = bal_df["balance"].mean()
+            self.report_df["mean_balance"] = bal_df["Balance"].mean()
             plot_num += 1
 
         costs_df = None
@@ -769,17 +773,17 @@ class Simulation(object):
             )
             div_df.set_index("Block", inplace=True)
             div_df["MeanDivergence"].plot(
-                ax=axes[plot_num], label="mean divergence", legend=True
+                ax=axes[plot_num], label="Mean Divergence", legend=True
             )
             div_df["MinDivergence"].plot(
-                ax=axes[plot_num], label="minimum divergence", legend=True
+                ax=axes[plot_num], label="Minimum Divergence", legend=True
             )
             div_df["MaxDivergence"].plot(
-                ax=axes[plot_num], label="max divergence", legend=True
+                ax=axes[plot_num], label="Max Divergence", legend=True
             )
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
-            axes[plot_num].set_title("Vault Divergence \nfrom Requirement")
+            axes[plot_num].set_title("Vault Reserve \n Divergence from Requirement")
             plot_num += 1
 
         # Plot WT risk status
@@ -857,7 +861,7 @@ class Simulation(object):
                 df = DataFrame(self.vb_values, columns=["Block", "Vb"])
                 df.set_index("Block", inplace=True)
                 df.plot(ax=axes[plot_num], legend=True, color="blue")
-            axes[plot_num].legend(["$V_m$", "$V_b$"], loc="lower left")
+            axes[plot_num].legend(["$V_m$", "$V_b$"], loc="center right")
 
             plot_num += 1
 
