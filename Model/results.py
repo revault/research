@@ -22,14 +22,14 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         "NUMBER_VAULTS",
         "REFILL_PERIOD",
         "REFILL_EXCESS",
-        "SPEND_RATE",
+        "UNVAULT_RATE",
         "INVALID_SPEND_RATE",
         "CATASTROPHE_RATE",
     ]
     if study_type not in req_types:
         logging.error(
             "Study requires a type from: NUMBER_VAULTS,"
-            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, SPEND_RATE,"
+            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, UNVAULT_RATE,"
             " INVALID_SPEND_RATE, CATASTROPHE_RATE, N_STK, N_MAN, HIST_CSV,"
             " RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION."
         )
@@ -47,7 +47,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
             NUMBER_VAULTS = {config_map["NUMBER_VAULTS"]}
             REFILL_PERIOD = {config_map["REFILL_PERIOD"]}
             REFILL_EXCESS = {config_map["REFILL_EXCESS"]}
-            SPEND_RATE = {config_map["SPEND_RATE"]}
+            UNVAULT_RATE = {config_map["UNVAULT_RATE"]}
             INVALID_SPEND_RATE = {config_map["INVALID_SPEND_RATE"]}
             CATASTROPHE_RATE = {config_map["CATASTROPHE_RATE"]}
         """
@@ -73,7 +73,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         int(config_map["NUMBER_VAULTS"]),
         int(config_map["REFILL_EXCESS"] * config_map["NUMBER_VAULTS"]),
         int(config_map["REFILL_PERIOD"]),
-        int(config_map["SPEND_RATE"]),
+        int(config_map["UNVAULT_RATE"]),
         float(config_map["INVALID_SPEND_RATE"]),
         float(config_map["CATASTROPHE_RATE"]),
         with_balance=True,
@@ -124,7 +124,7 @@ if __name__ == "__main__":
         "NUMBER_VAULTS": 5,
         "REFILL_PERIOD": 144 * 31,
         "REFILL_EXCESS": 1,
-        "SPEND_RATE": 1,
+        "UNVAULT_RATE": 1,
         "DELEGATE_RATE": 1,
         "INVALID_SPEND_RATE": 0.1,
         "CATASTROPHE_RATE": 0.005,

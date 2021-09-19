@@ -19,8 +19,8 @@ CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", None)
 NUMBER_VAULTS = os.getenv("NUMBER_VAULTS", None)
 REFILL_EXCESS = os.getenv("REFILL_EXCESS", None)
 REFILL_PERIOD = os.getenv("REFILL_PERIOD", None)
-# Spend rate per day
-SPEND_RATE = os.getenv("SPEND_RATE", None)
+# Unvault rate per day
+UNVAULT_RATE = os.getenv("UNVAULT_RATE", None)
 # Invalid rate per spend
 INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", None)
 # Catastrophe rate per day
@@ -45,7 +45,7 @@ if __name__ == "__main__":
         NUMBER_VAULTS,
         REFILL_EXCESS,
         REFILL_PERIOD,
-        SPEND_RATE,
+        UNVAULT_RATE,
         INVALID_SPEND_RATE,
         CATASTROPHE_RATE,
     ]
@@ -54,7 +54,7 @@ if __name__ == "__main__":
             "Need all these environment variables to be set: N_STK, N_MAN, LOCKTIME,"
             " HIST_CSV, RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION,"
             " CANCEL_COIN_SELECTION, NUMBER_VAULTS, REFILL_EXCESS,"
-            " REFILL_PERIOD, SPEND_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE."
+            " REFILL_PERIOD, UNVAULT_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE."
         )
         sys.exit(1)
     logging.info(f"Config: {', '.join(v for v in req_vars)}")
@@ -70,7 +70,7 @@ if __name__ == "__main__":
         int(NUMBER_VAULTS),
         int(REFILL_EXCESS),
         int(REFILL_PERIOD),
-        float(SPEND_RATE),
+        float(UNVAULT_RATE),
         float(INVALID_SPEND_RATE),
         float(CATASTROPHE_RATE),
         with_balance=True,
