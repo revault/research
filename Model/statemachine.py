@@ -248,7 +248,7 @@ class StateMachine:
         self.I_version = i_version
         self.cancel_coin_selection = cancel_coin_selec
 
-        self.vb_coins_count = 8
+        self.vb_coins_count = 6
         self.vm_factor = 1.2  # multiplier M
         self.I_2_tol = 0.3
 
@@ -689,7 +689,8 @@ class StateMachine:
             if cf_size + dist_rese_size > MAX_TX_SIZE:
                 added_coins.append(
                     self.coin_pool.add_coin(
-                        total_to_consume - consumed,
+                        total_to_consume
+                        - consumed,  # - P2WPKH_OUTPUT_SIZE*feerate FIXME
                         processing_state=ProcessingState.UNPROCESSED,
                     )
                 )
@@ -715,7 +716,8 @@ class StateMachine:
             if cf_size + dist_bonu_size > MAX_TX_SIZE:
                 added_coins.append(
                     self.coin_pool.add_coin(
-                        total_to_consume - consumed,
+                        total_to_consume
+                        - consumed,  # - P2WPKH_OUTPUT_SIZE*feerate FIXME
                         processing_state=ProcessingState.UNPROCESSED,
                     )
                 )
