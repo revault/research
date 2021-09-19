@@ -39,7 +39,7 @@ class Simulation(object):
         estimate_strat,
         i_version,
         cancel_coin_selec,
-        exp_active_vaults,
+        num_vaults,
         refill_excess,
         refill_period,
         spend_rate,
@@ -57,8 +57,7 @@ class Simulation(object):
         with_fb_coins_dist=False,
     ):
         # Stakeholder parameters
-        self.expected_active_vaults = exp_active_vaults
-        # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
+        self.num_vaults = num_vaults
         self.refill_excess = refill_excess
         self.refill_period = refill_period
         self.spend_rate = spend_rate
@@ -115,7 +114,7 @@ class Simulation(object):
         vb_coins_count: {self.wt.vb_coins_count}\n\
         vm_factor: {self.wt.vm_factor}\n\
         Refill excess: {self.refill_excess}\n\
-        Expected active vaults: {self.expected_active_vaults}\n\
+        Expected active vaults: {self.num_vaults}\n\
         Refill period: {self.refill_period}\n\
         Spend rate: {self.spend_rate}\n\
         Invalid spend rate: {self.invalid_spend_rate}\n\
@@ -396,10 +395,9 @@ class Simulation(object):
 
         # At startup allocate as many reserves as we expect to have vaults
         logging.info(
-            f"Initializing at block {start_block} with {self.expected_active_vaults}"
-            " new vaults"
+            f"Initializing at block {start_block} with {self.num_vaults} new vaults"
         )
-        self.refill_sequence(start_block, self.expected_active_vaults)
+        self.refill_sequence(start_block, self.num_vaults)
 
         # For each block in the range, simulate an action affecting the watchtower
         # (formally described as a sequence of transitions) based on the configured
@@ -412,7 +410,7 @@ class Simulation(object):
 
             # We always try to keep the number of expected vaults under watch. We might
             # not be able to allocate if a CF tx is pending but not yet confirmed.
-            for i in range(len(self.wt.list_vaults()), self.expected_active_vaults):
+            for i in range(len(self.wt.list_vaults()), self.num_vaults):
                 amount = int(10e10)  # 100 BTC
                 try:
                     self.wt.allocate(self.new_vault_id(), amount, block)
@@ -451,7 +449,7 @@ class Simulation(object):
                 except NoVaultToSpend:
                     logging.info("Failed to Cancel (catastrophe), no vault to spend")
                 # Reboot operation after catastrophe
-                self.refill_sequence(block, self.expected_active_vaults)
+                self.refill_sequence(block, self.num_vaults)
 
             if self.with_balance:
                 self.balances.append(
@@ -965,7 +963,7 @@ if __name__ == "__main__":
         estimate_strat="ME30",
         i_version=3,
         cancel_coin_selec=0,
-        exp_active_vaults=5,
+        num_vaults=5,
         refill_excess=0,
         refill_period=1008,
         spend_rate=1,

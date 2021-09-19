@@ -19,7 +19,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         "RESERVE_STRAT",
         "ESTIMATE_STRAT",
         "I_VERSION",
-        "EXPECTED_ACTIVE_VAULTS",
+        "NUMBER_VAULTS",
         "REFILL_PERIOD",
         "REFILL_EXCESS",
         "SPEND_RATE",
@@ -28,8 +28,8 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
     ]
     if study_type not in req_types:
         logging.error(
-            "Study requires a type from: EXPECTED_ACTIVE_VAULTS,"
-            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, DELEGATION_PERIOD,"
+            "Study requires a type from: NUMBER_VAULTS,"
+            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, SPEND_RATE,"
             " INVALID_SPEND_RATE, CATASTROPHE_RATE, N_STK, N_MAN, HIST_CSV,"
             " RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION."
         )
@@ -44,7 +44,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
             RESERVE_STRAT = {config_map["RESERVE_STRAT"]}
             ESTIMATE_STRAT = {config_map["ESTIMATE_STRAT"]}
             I_VERSION = {config_map["I_VERSION"]}
-            EXPECTED_ACTIVE_VAULTS = {config_map["EXPECTED_ACTIVE_VAULTS"]}
+            NUMBER_VAULTS = {config_map["NUMBER_VAULTS"]}
             REFILL_PERIOD = {config_map["REFILL_PERIOD"]}
             REFILL_EXCESS = {config_map["REFILL_EXCESS"]}
             SPEND_RATE = {config_map["SPEND_RATE"]}
@@ -70,8 +70,8 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         config_map["ESTIMATE_STRAT"],
         int(config_map["I_VERSION"]),
         int(config_map["CANCEL_COIN_SELECTION"]),
-        int(config_map["EXPECTED_ACTIVE_VAULTS"]),
-        int(config_map["REFILL_EXCESS"] * config_map["EXPECTED_ACTIVE_VAULTS"]),
+        int(config_map["NUMBER_VAULTS"]),
+        int(config_map["REFILL_EXCESS"] * config_map["NUMBER_VAULTS"]),
         int(config_map["REFILL_PERIOD"]),
         int(config_map["SPEND_RATE"]),
         float(config_map["INVALID_SPEND_RATE"]),
@@ -121,7 +121,7 @@ if __name__ == "__main__":
         "RESERVE_STRAT": "CUMMAX95Q90",
         "ESTIMATE_STRAT": "ME30",
         "I_VERSION": 3,
-        "EXPECTED_ACTIVE_VAULTS": 5,
+        "NUMBER_VAULTS": 5,
         "REFILL_PERIOD": 144 * 31,
         "REFILL_EXCESS": 1,
         "SPEND_RATE": 1,
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     }
 
     # Set the study parameters
-    study_type = "EXPECTED_ACTIVE_VAULTS"
+    study_type = "NUMBER_VAULTS"
     val_range = [1, 5, 10, 25, 50, 100, 500]
     sim_repeats = 10
     cores = 10
