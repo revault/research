@@ -37,7 +37,7 @@ class Simulation(object):
         num_vaults,
         refill_excess,
         refill_period,
-        spend_rate,
+        unvault_rate,
         invalid_spend_rate,
         catastrophe_rate,
         delegate_rate,
@@ -57,7 +57,7 @@ class Simulation(object):
         self.num_vaults = num_vaults
         self.refill_excess = refill_excess
         self.refill_period = refill_period
-        self.spend_rate = spend_rate
+        self.unvault_rate = unvault_rate
         self.delegate_rate = delegate_rate
 
         # Manager parameters
@@ -115,7 +115,7 @@ class Simulation(object):
         Refill excess: {self.refill_excess}\n\
         Expected active vaults: {self.num_vaults}\n\
         Refill period: {self.refill_period}\n\
-        Spend rate: {self.spend_rate}\n\
+        Unvault rate: {self.unvault_rate}\n\
         Invalid spend rate: {self.invalid_spend_rate}\n\
         Catastrophe rate: {self.catastrophe_rate}\n\
         """
@@ -431,8 +431,8 @@ class Simulation(object):
                 if random.random() < self.delegate_rate / BLOCKS_PER_DAY:
                     self.delegate_sequence(block)
 
-            # The spend rate is a rate per day
-            if random.random() < self.spend_rate / BLOCKS_PER_DAY:
+            # The unvault rate is a rate per day
+            if random.random() < self.unvault_rate / BLOCKS_PER_DAY:
                 if self.scale_fixed:
                     self.delegate_sequence(block)
                 # generate invalid spend, requires cancel
@@ -978,7 +978,7 @@ if __name__ == "__main__":
         num_vaults=5,
         refill_excess=0,
         refill_period=1008,
-        spend_rate=1,
+        unvault_rate=1,
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
         delegate_rate=1,
