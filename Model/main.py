@@ -16,7 +16,7 @@ RESERVE_STRAT = os.getenv("RESERVE_STRAT", None)
 ESTIMATE_STRAT = os.getenv("ESTIMATE_STRAT", None)
 I_VERSION = os.getenv("I_VERSION", None)
 CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", None)
-EXPECTED_ACTIVE_VAULTS = os.getenv("EXPECTED_ACTIVE_VAULTS", None)
+NUMBER_VAULTS = os.getenv("NUMBER_VAULTS", None)
 REFILL_EXCESS = os.getenv("REFILL_EXCESS", None)
 REFILL_PERIOD = os.getenv("REFILL_PERIOD", None)
 # Spend rate per day
@@ -44,7 +44,7 @@ if __name__ == "__main__":
         ESTIMATE_STRAT,
         I_VERSION,
         CANCEL_COIN_SELECTION,
-        EXPECTED_ACTIVE_VAULTS,
+        NUMBER_VAULTS,
         REFILL_EXCESS,
         REFILL_PERIOD,
         SPEND_RATE,
@@ -56,7 +56,7 @@ if __name__ == "__main__":
         logging.error(
             "Need all these environment variables to be set: N_STK, N_MAN, LOCKTIME,"
             " HIST_CSV, RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION,"
-            " CANCEL_COIN_SELECTION, EXPECTED_ACTIVE_VAULTS, REFILL_EXCESS,"
+            " CANCEL_COIN_SELECTION, NUMBER_VAULTS, REFILL_EXCESS,"
             " REFILL_PERIOD, SPEND_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE,"
             " DELEGATE_RATE."
         )
@@ -71,7 +71,7 @@ if __name__ == "__main__":
         ESTIMATE_STRAT,
         int(I_VERSION),
         int(CANCEL_COIN_SELECTION),
-        int(EXPECTED_ACTIVE_VAULTS),
+        int(NUMBER_VAULTS),
         int(REFILL_EXCESS),
         int(REFILL_PERIOD),
         float(SPEND_RATE),
