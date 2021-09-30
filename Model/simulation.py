@@ -37,14 +37,12 @@ class Simulation(object):
         hist_feerate_csv,
         reserve_strat,
         estimate_strat,
-        o_version,
         i_version,
-        allocate_version,
         cancel_coin_selec,
-        exp_active_vaults,
+        num_vaults,
         refill_excess,
         refill_period,
-        spend_rate,
+        unvault_rate,
         invalid_spend_rate,
         catastrophe_rate,
         with_balance=False,
@@ -59,11 +57,10 @@ class Simulation(object):
         with_fb_coins_dist=False,
     ):
         # Stakeholder parameters
-        self.expected_active_vaults = exp_active_vaults
-        # In general 2 with reserve_strat = CUMMAX95Q90 and 10 to 15 with reserve_strat = 95Q90
+        self.num_vaults = num_vaults
         self.refill_excess = refill_excess
         self.refill_period = refill_period
-        self.spend_rate = spend_rate
+        self.unvault_rate = unvault_rate
 
         # Manager parameters
         self.invalid_spend_rate = invalid_spend_rate
@@ -77,9 +74,7 @@ class Simulation(object):
             hist_feerate_csv,
             reserve_strat,
             estimate_strat,
-            o_version,
             i_version,
-            allocate_version,
             cancel_coin_selec,
         )
         self.vault_count = 0
@@ -93,6 +88,7 @@ class Simulation(object):
         self.with_op_cost = with_op_cost
         self.with_cum_op_cost = with_cum_op_cost
         self.costs = []
+        self.wt_risk_time = []
         self.with_overpayments = with_overpayments
         self.overpayments = []
         self.with_coin_pool = with_coin_pool
@@ -105,8 +101,6 @@ class Simulation(object):
         self.risk_status = []
         self.with_coin_pool_age = with_coin_pool_age
         self.coin_pool_age = []
-        self.with_risk_time = with_risk_time
-        self.wt_risk_time = []
         self.with_fb_coins_dist = with_fb_coins_dist
         self.fb_coins_dist = []
         self.vm_values = []
@@ -120,14 +114,15 @@ class Simulation(object):
         vb_coins_count: {self.wt.vb_coins_count}\n\
         vm_factor: {self.wt.vm_factor}\n\
         Refill excess: {self.refill_excess}\n\
-        Expected active vaults: {self.expected_active_vaults}\n\
+        Expected active vaults: {self.num_vaults}\n\
         Refill period: {self.refill_period}\n\
-        Spend rate: {self.spend_rate}\n\
+        Unvault rate: {self.unvault_rate}\n\
         Invalid spend rate: {self.invalid_spend_rate}\n\
         Catastrophe rate: {self.catastrophe_rate}\n\
         """
         self.report_df = DataFrame(
             columns=[
+                "mean_balance",
                 "cum_ops_cost",
                 "cum_cancel_fee",
                 "cum_cf_fee",
@@ -140,6 +135,7 @@ class Simulation(object):
                 "delegation_failure_rate",
                 "max_cancel_conf_time",
                 "max_cf_conf_time",
+                "max_risk_coef",
             ],
             index=[0],
         )
@@ -156,10 +152,9 @@ class Simulation(object):
 
     def amount_needed(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
-        Used by stakeholder wallet software.
-        R(t) in the paper.
+        Used by stakeholder wallet software. R(t, E) in the paper.
 
-        Note: stakeholder knows WT's balance and num_vaults (or expected_active_vaults).
+        Note: stakeholder knows WT's balance, num_vaults, fb_coins_dist.
               Stakeholder doesn't know which coins are allocated or not.
         """
         bal = self.wt.balance()
@@ -187,22 +182,30 @@ class Simulation(object):
         return int(R)
 
     def _reserve_divergence(self, block_height):
+        """Compute how far the vault's reserves have divereged from the current fee reserve per vault.
+        Compute the risk status; the total amount (satoshis) below the required reserve among available vaults."""
         vaults = self.wt.list_available_vaults()
         if vaults != []:
             divergence = []
-            frpv = self.wt.fee_reserve_per_vault(block_height)
+            required_reserve = sum(self.wt.coins_dist_reserve(block_height))
             for vault in vaults:
-                div = vault.reserve_balance() - frpv
+                div = vault.reserve_balance() - required_reserve
                 divergence.append(div)
-            # block, mean div, min div, max div
-            self.divergence.append(
-                [
-                    block_height,
-                    sum(divergence) / len(vaults),
-                    min(divergence),
-                    max(divergence),
-                ]
-            )
+            if self.with_divergence:
+                self.divergence.append(
+                    [
+                        block_height,
+                        sum(divergence) / len(vaults),
+                        min(divergence),
+                        max(divergence),
+                    ]
+                )
+
+            if self.with_risk_status:
+                risk_by_vault = [div for div in divergence if div < 0]
+                nominal_risk = sum(risk_by_vault)
+                risk_coefficient = (len(risk_by_vault) / len(vaults)) * nominal_risk
+                self.risk_status.append((block_height, risk_coefficient))
 
     def refill_sequence(self, block_height, expected_new_vaults):
         refill_amount = self.amount_needed(block_height, expected_new_vaults)
@@ -280,14 +283,15 @@ class Simulation(object):
                     f"  Allocation transition FAILED for vault {vault.id}: {str(e)}"
                 )
 
-    def spend_sequence(self, block_height):
-        logging.info(f"Spend sequence at block {block_height}")
+    def spend(self, block_height):
         if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
         vault_id = random.choice(self.wt.list_available_vaults()).id
         # Spend transition
-        logging.info(f"  Spend transition at block {block_height}")
+        logging.info(
+            f"  Spend transition with vault {vault_id} at block {block_height}"
+        )
         self.wt.spend(vault_id, block_height)
 
         # snapshot coin pool after spend attempt
@@ -295,8 +299,8 @@ class Simulation(object):
             amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_spend.append([block_height, amounts])
 
-    def cancel_sequence(self, block_height):
-        logging.info(f"Cancel sequence at block {block_height}")
+    def cancel(self, block_height):
+        logging.info(f"Cancel at block {block_height}")
         if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
@@ -361,6 +365,9 @@ class Simulation(object):
                     + TX_OVERHEAD_SIZE
                     <= MAX_TX_SIZE
                 )
+                logging.debug(
+                    f"  Consolidate-fanout confirm transition at block {height}"
+                )
                 self.wt.finalize_consolidate_fanout(tx, height)
                 self.top_up_sequence(height)
                 if tx.txouts[-1].processing_state == ProcessingState.UNPROCESSED:
@@ -373,6 +380,7 @@ class Simulation(object):
                         self.cf_fee = 0
                     self.cf_fee += cf_fee
             elif isinstance(tx, CancelTx):
+                logging.debug(f"  Cancel confirm transition at block {height}")
                 self.wt.finalize_cancel(tx, height)
             else:
                 raise
@@ -387,10 +395,9 @@ class Simulation(object):
 
         # At startup allocate as many reserves as we expect to have vaults
         logging.info(
-            f"Initializing at block {start_block} with {self.expected_active_vaults}"
-            " new vaults"
+            f"Initializing at block {start_block} with {self.num_vaults} new vaults"
         )
-        self.refill_sequence(start_block, self.expected_active_vaults)
+        self.refill_sequence(start_block, self.num_vaults)
 
         # For each block in the range, simulate an action affecting the watchtower
         # (formally described as a sequence of transitions) based on the configured
@@ -403,7 +410,7 @@ class Simulation(object):
 
             # We always try to keep the number of expected vaults under watch. We might
             # not be able to allocate if a CF tx is pending but not yet confirmed.
-            for i in range(len(self.wt.list_vaults()), self.expected_active_vaults):
+            for i in range(len(self.wt.list_vaults()), self.num_vaults):
                 amount = int(10e10)  # 100 BTC
                 try:
                     self.wt.allocate(self.new_vault_id(), amount, block)
@@ -419,19 +426,19 @@ class Simulation(object):
             if block % self.refill_period == 0:
                 self.refill_sequence(block, 0)
 
-            # The spend rate is a rate per day
-            if random.random() < self.spend_rate / BLOCKS_PER_DAY:
+            # The unvault rate is a rate per day
+            if random.random() < self.unvault_rate / BLOCKS_PER_DAY:
                 self.delegate_sequence(block)
                 # generate invalid spend, requires cancel
                 if random.random() < self.invalid_spend_rate:
                     try:
-                        self.cancel_sequence(block)
+                        self.cancel(block)
                     except NoVaultToSpend:
                         logging.info("Failed to Cancel, no vault to spend")
                 # generate valid spend, requires processing
                 else:
                     try:
-                        self.spend_sequence(block)
+                        self.spend(block)
                     except NoVaultToSpend:
                         logging.info("Failed to Spend, no vault to spend")
 
@@ -442,7 +449,7 @@ class Simulation(object):
                 except NoVaultToSpend:
                     logging.info("Failed to Cancel (catastrophe), no vault to spend")
                 # Reboot operation after catastrophe
-                self.refill_sequence(block, self.expected_active_vaults)
+                self.refill_sequence(block, self.num_vaults)
 
             if self.with_balance:
                 self.balances.append(
@@ -454,12 +461,6 @@ class Simulation(object):
                     ]
                 )
 
-            if self.with_risk_status:
-                status = self.wt.risk_status(block)
-                if (status["vaults_at_risk"] != 0) or (
-                    status["delegation_requires"] != 0
-                ):
-                    self.risk_status.append(status)
             if self.with_op_cost or self.with_cum_op_cost:
                 self.costs.append(
                     [block, self.refill_fee, self.cf_fee, self.cancel_fee]
@@ -499,7 +500,7 @@ class Simulation(object):
                         risk_off = block
                         self.wt_risk_time.append((risk_on, risk_off))
 
-            if self.with_divergence:
+            if self.with_divergence or self.with_risk_status:
                 self._reserve_divergence(block)
 
             if self.with_fb_coins_dist:
@@ -553,7 +554,6 @@ class Simulation(object):
                 self.with_coin_pool,
                 self.with_risk_status,
                 self.with_coin_pool_age,
-                self.with_risk_time,
                 self.with_fb_coins_dist,
             ]
         )
@@ -566,12 +566,13 @@ class Simulation(object):
         if self.with_balance and self.balances != []:
             bal_df = DataFrame(
                 self.balances,
-                columns=["block", "balance", "required reserve", "unallocated balance"],
+                columns=["block", "Balance", "Required Reserve", "Unallocated Balance"],
             )
             bal_df.set_index(["block"], inplace=True)
             bal_df.plot(ax=axes[plot_num], title="WT Balance", legend=True)
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
+            self.report_df["mean_balance"] = bal_df["Balance"].mean()
             plot_num += 1
 
         costs_df = None
@@ -770,39 +771,30 @@ class Simulation(object):
             )
             div_df.set_index("Block", inplace=True)
             div_df["MeanDivergence"].plot(
-                ax=axes[plot_num], label="mean divergence", legend=True
+                ax=axes[plot_num], label="Mean Divergence", legend=True
             )
             div_df["MinDivergence"].plot(
-                ax=axes[plot_num], label="minimum divergence", legend=True
+                ax=axes[plot_num], label="Minimum Divergence", legend=True
             )
             div_df["MaxDivergence"].plot(
-                ax=axes[plot_num], label="max divergence", legend=True
+                ax=axes[plot_num], label="Max Divergence", legend=True
             )
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
-            axes[plot_num].set_title("Vault Divergence \nfrom Requirement")
+            axes[plot_num].set_title("Vault Reserve \n Divergence from Requirement")
             plot_num += 1
 
         # Plot WT risk status
         if self.with_risk_status and self.risk_status != []:
-            risk_status_df = DataFrame(self.risk_status)
+            risk_status_df = DataFrame(
+                self.risk_status, columns=["block", "risk coefficient"]
+            )
+            self.report_df["max_risk_coef"] = risk_status_df["risk coefficient"].max()
             risk_status_df.set_index(["block"], inplace=True)
-            risk_status_df["num_vaults"].plot(
-                ax=axes[plot_num], label="number of vaults", color="r", legend=True
-            )
-            risk_status_df["vaults_at_risk"].plot(
-                ax=axes[plot_num], label="vaults at risk", color="b", legend=True
-            )
-            ax2 = axes[plot_num].twinx()
-            risk_status_df["delegation_requires"].plot(
-                ax=ax2, label="new delegation requires", color="g", legend=True
-            )
-            risk_status_df["severity"].plot(
-                ax=ax2, label="total severity of risk", color="k", legend=True
-            )
-            axes[plot_num].set_ylabel("Vaults", labelpad=15)
+            risk_status_df.plot(ax=axes[plot_num])
+            axes[plot_num].set_title("Risk Coefficient, $\Omega$")
+            axes[plot_num].set_ylabel("Severity", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
-            ax2.set_ylabel("Satoshis", labelpad=15)
             plot_num += 1
 
         # Plot overpayments
@@ -867,7 +859,7 @@ class Simulation(object):
                 df = DataFrame(self.vb_values, columns=["Block", "Vb"])
                 df.set_index("Block", inplace=True)
                 df.plot(ax=axes[plot_num], legend=True, color="blue")
-            axes[plot_num].legend(["$V_m$", "$V_b$"], loc="lower left")
+            axes[plot_num].legend(["$V_m$", "$V_b$"], loc="center right")
 
             plot_num += 1
 
@@ -881,41 +873,28 @@ class Simulation(object):
         if show:
             plt.show()
 
-        self.report_df["delegation_failure_count"][0] = self.delegation_failures
-        self.report_df["delegation_failure_rate"][0] = (
-            self.delegation_failures / self.delegation_successes
-        )
-        report += (
-            f"Delegation failures: {self.delegation_failures} /"
-            f" {self.delegation_successes}"
-            f" ({self.delegation_failures / self.delegation_successes * 100}%)\n"
-        )
+        if self.delegation_failures > 0 or self.delegation_successes > 0:
+            self.report_df["delegation_failure_count"][0] = self.delegation_failures
+            self.report_df["delegation_failure_rate"][0] = self.delegation_failures / (
+                self.delegation_successes + self.delegation_failures
+            )
+
+            self.report_df["delegation_failure_rate"][0] = None
+            report += (
+                f"Delegation failures: {self.delegation_failures} /"
+                f" { (self.delegation_successes + self.delegation_failures)}"
+                f" ({(self.delegation_failures /  (self.delegation_successes + self.delegation_failures) )* 100}%)\n"
+            )
 
         return (report, self.report_df)
 
     def plot_fee_history(self, start_block, end_block, output=None, show=False):
 
         plt.style.use(["plot_style.txt"])
-        subplots_len = 3
-        fig, axes = plt.subplots(
-            subplots_len, 1, sharex=True, figsize=(5.4, subplots_len * 3.9)
-        )
-        self.wt.hist_df["mean_feerate"][start_block:end_block].plot(ax=axes[0])
-        self.wt.hist_df["min_feerate"][start_block:end_block].plot(
-            ax=axes[1], legend=True
-        )
-        self.wt.hist_df["max_feerate"][start_block:end_block].plot(
-            ax=axes[2], legend=True
-        )
-        axes[0].set_title("Mean Fee Rate")
-        axes[0].set_ylabel("Satoshis", labelpad=15)
-        axes[0].set_xlabel("Block", labelpad=15)
-        axes[1].set_title("Min Fee Rate")
-        axes[1].set_ylabel("Satoshis", labelpad=15)
-        axes[1].set_xlabel("Block", labelpad=15)
-        axes[2].set_title("Max Fee Rate")
-        axes[2].set_ylabel("Satoshis", labelpad=15)
-        axes[2].set_xlabel("Block", labelpad=15)
+        fig, axes = plt.subplots(1, 1, figsize=(5.4, 3.9))
+        self.wt.hist_df["mean_feerate"][start_block:end_block].plot(color="black")
+        axes.set_ylabel("Satoshis per Weight Unit", labelpad=15)
+        axes.set_xlabel("Block", labelpad=15)
 
         if output is not None:
             plt.savefig(f"{output}.png")
@@ -974,7 +953,7 @@ class Simulation(object):
 # FIXME: eventually have some small pytests
 if __name__ == "__main__":
 
-    # logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.DEBUG)
     sim = Simulation(
         n_stk=5,
         n_man=5,
@@ -982,24 +961,22 @@ if __name__ == "__main__":
         hist_feerate_csv="../block_fees/historical_fees.csv",
         reserve_strat="CUMMAX95Q90",
         estimate_strat="ME30",
-        o_version=1,
-        i_version=2,
-        allocate_version=1,
+        i_version=3,
         cancel_coin_selec=0,
-        exp_active_vaults=5,
-        refill_excess=4 * 5,
+        num_vaults=5,
+        refill_excess=0,
         refill_period=1008,
-        spend_rate=1,
+        unvault_rate=1,
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
-        with_balance=False,
-        with_divergence=False,
+        with_balance=True,
+        with_divergence=True,
         with_op_cost=False,
         with_cum_op_cost=False,
         with_overpayments=False,
         with_coin_pool=False,
         with_coin_pool_age=False,
-        with_risk_status=False,
+        with_risk_status=True,
         with_risk_time=False,
         with_fb_coins_dist=False,
     )
@@ -1008,6 +985,7 @@ if __name__ == "__main__":
     end_block = 680000
 
     sim.run(start_block, end_block)
-    sim.plot_frpv(start_block, end_block, show=True)
-    # sim.plot_fee_history(start_block, end_block, show=True)
+    # sim.plot(show=True)
+    # sim.plot_frpv(start_block, end_block, show=True)
+    # sim.plot_fee_history(start_block, end_block, output="fee_history")
     # sim.plot_fee_estimate("85Q1H", start_block, end_block, show=True)

@@ -1,6 +1,7 @@
 import logging
 import multiprocessing as mp
 import os
+from pandas import DataFrame
 import pandas as pd
 import random
 import sys
@@ -10,29 +11,27 @@ from simulation import Simulation
 
 
 def sim_process(prng_seed, val=None, study_type=None, config_map=None):
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.ERROR)
     req_types = [
         "N_STK",
         "N_MAN",
         "HIST_CSV",
         "RESERVE_STRAT",
         "ESTIMATE_STRAT",
-        "O_VERSION",
         "I_VERSION",
-        "ALLOCATE_VERSION",
-        "EXPECTED_ACTIVE_VAULTS",
+        "NUMBER_VAULTS",
         "REFILL_PERIOD",
         "REFILL_EXCESS",
-        "SPEND_RATE",
+        "UNVAULT_RATE",
         "INVALID_SPEND_RATE",
         "CATASTROPHE_RATE",
     ]
     if study_type not in req_types:
         logging.error(
-            "Study requires a type from: EXPECTED_ACTIVE_VAULTS,"
-            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, DELEGATION_PERIOD,"
+            "Study requires a type from: NUMBER_VAULTS,"
+            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, UNVAULT_RATE,"
             " INVALID_SPEND_RATE, CATASTROPHE_RATE, N_STK, N_MAN, HIST_CSV,"
-            " RESERVE_STRAT, ESTIMATE_STRAT, O_VERSION, I_VERSION, ALLOCATE_VERSION."
+            " RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION."
         )
         sys.exit(1)
 
@@ -44,13 +43,11 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
             HIST_CSV = {config_map["HIST_CSV"]}
             RESERVE_STRAT = {config_map["RESERVE_STRAT"]}
             ESTIMATE_STRAT = {config_map["ESTIMATE_STRAT"]}
-            O_VERSION = {config_map["O_VERSION"]}
             I_VERSION = {config_map["I_VERSION"]}
-            ALLOCATE_VERSION = {config_map["ALLOCATE_VERSION"]}
-            EXPECTED_ACTIVE_VAULTS = {config_map["EXPECTED_ACTIVE_VAULTS"]}
+            NUMBER_VAULTS = {config_map["NUMBER_VAULTS"]}
             REFILL_PERIOD = {config_map["REFILL_PERIOD"]}
             REFILL_EXCESS = {config_map["REFILL_EXCESS"]}
-            SPEND_RATE = {config_map["SPEND_RATE"]}
+            UNVAULT_RATE = {config_map["UNVAULT_RATE"]}
             INVALID_SPEND_RATE = {config_map["INVALID_SPEND_RATE"]}
             CATASTROPHE_RATE = {config_map["CATASTROPHE_RATE"]}
         """
@@ -71,20 +68,18 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         config_map["HIST_CSV"],
         config_map["RESERVE_STRAT"],
         config_map["ESTIMATE_STRAT"],
-        int(config_map["O_VERSION"]),
         int(config_map["I_VERSION"]),
-        int(config_map["ALLOCATE_VERSION"]),
         int(config_map["CANCEL_COIN_SELECTION"]),
-        int(config_map["EXPECTED_ACTIVE_VAULTS"]),
-        int(config_map["REFILL_EXCESS"] * config_map["EXPECTED_ACTIVE_VAULTS"]),
+        int(config_map["NUMBER_VAULTS"]),
+        int(config_map["REFILL_EXCESS"] * config_map["NUMBER_VAULTS"]),
         int(config_map["REFILL_PERIOD"]),
-        int(config_map["SPEND_RATE"]),
+        int(config_map["UNVAULT_RATE"]),
         float(config_map["INVALID_SPEND_RATE"]),
         float(config_map["CATASTROPHE_RATE"]),
         with_balance=True,
         with_divergence=True,
         with_cum_op_cost=True,
-        with_overpayments=True,
+        with_risk_status=True,
     )
     try:
         sim.run(start_block, end_block)
@@ -103,7 +98,6 @@ def multiprocess_run(range_seed, val, study_type, config_map):
     # FIXME: what if process fails?
     assert len(range_seed) >= 2
     cores = len(range_seed)
-    # Todo, change the prng for each worker
     with mp.Pool(processes=cores) as pool:
         dfs = pool.map(
             partial(sim_process, val=val, study_type=study_type, config_map=config_map),
@@ -122,25 +116,24 @@ if __name__ == "__main__":
     config_map = {
         "N_STK": 5,
         "N_MAN": 3,
-        "LOCKTIME": 12,
+        "LOCKTIME": 72,
         "HIST_CSV": "../block_fees/historical_fees.csv",
         "RESERVE_STRAT": "CUMMAX95Q90",
         "ESTIMATE_STRAT": "ME30",
-        "O_VERSION": 1,
-        "I_VERSION": 2,
-        "ALLOCATE_VERSION": 0,
-        "EXPECTED_ACTIVE_VAULTS": 5,
-        "REFILL_PERIOD": 144 * 7,
-        "REFILL_EXCESS": 5,
-        "SPEND_RATE": 1,
+        "I_VERSION": 3,
+        "NUMBER_VAULTS": 5,
+        "REFILL_PERIOD": 144 * 31,
+        "REFILL_EXCESS": 1,
+        "UNVAULT_RATE": 1,
+        "DELEGATE_RATE": 1,
         "INVALID_SPEND_RATE": 0.1,
         "CATASTROPHE_RATE": 0.005,
         "CANCEL_COIN_SELECTION": 0,
     }
 
     # Set the study parameters
-    study_type = "O_VERSION"
-    val_range = [0, 1]
+    study_type = "NUMBER_VAULTS"
+    val_range = [1, 5, 10, 25, 50, 100, 500]
     sim_repeats = 10
     cores = 10
 
@@ -148,6 +141,7 @@ if __name__ == "__main__":
     range_seed = list(range(21000000, 21000000 + cores))
 
     # Generate results
+    report_rows = []
     for val in val_range:
         config_map[study_type] = val
         report = (
@@ -167,9 +161,50 @@ if __name__ == "__main__":
         for df in sim_results:
             stats_df = pd.concat([stats_df, df], axis=0)
 
+        row = [val]
         for col in stats_df.columns:
             report += f"{col} mean:    {stats_df[col].mean()}\n"
             report += f"{col} std dev: {stats_df[col].std()}\n"
-
+            row.append(stats_df[col].mean())
+            row.append(stats_df[col].std())
+        report_rows.append(row)
         with open(f"{report_name}-{val}.txt", "w+", encoding="utf-8") as f:
             f.write(report)
+
+        # Save the csv at each val in case of failure
+        report_df = DataFrame(
+            report_rows,
+            columns=[
+                study_type,
+                "mean_balance_mean",
+                "mean_balance_std_dev",
+                "cum_ops_cost_mean",
+                "cum_ops_cost_std_dev",
+                "cum_cancel_fee_mean",
+                "cum_cancel_fee_std_dev",
+                "cum_cf_fee_mean",
+                "cum_cf_fee_std_dev",
+                "cum_refill_fee_mean",
+                "cum_refill_fee_std_dev",
+                "time_at_risk_mean",
+                "time_at_risk_std_dev",
+                "mean_recovery_time_mean",
+                "mean_recovery_time_std_dev",
+                "median_recovery_time_mean",
+                "median_recovery_time_std_dev",
+                "max_recovery_time_mean",
+                "max_recovery_time_std_dev",
+                "delegation_failure_count_mean",
+                "delegation_failure_count_std_dev",
+                "delegation_failure_rate_mean",
+                "delegation_failure_rate_std_dev",
+                "max_cancel_conf_time_mean",
+                "max_cancel_conf_time_std_dev",
+                "max_cf_conf_time_mean",
+                "max_cf_conf_time_std_dev",
+                "max_risk_coef_mean",
+                "max_risk_coef_std_dev",
+            ],
+        )
+        report_df.set_index(f"{study_type}", inplace=True)
+        report_df.to_csv(f"{report_name}")
