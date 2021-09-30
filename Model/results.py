@@ -17,9 +17,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         "HIST_CSV",
         "RESERVE_STRAT",
         "ESTIMATE_STRAT",
-        "O_VERSION",
         "I_VERSION",
-        "ALLOCATE_VERSION",
         "EXPECTED_ACTIVE_VAULTS",
         "REFILL_PERIOD",
         "REFILL_EXCESS",
@@ -32,7 +30,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
             "Study requires a type from: EXPECTED_ACTIVE_VAULTS,"
             " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, DELEGATION_PERIOD,"
             " INVALID_SPEND_RATE, CATASTROPHE_RATE, N_STK, N_MAN, HIST_CSV,"
-            " RESERVE_STRAT, ESTIMATE_STRAT, O_VERSION, I_VERSION, ALLOCATE_VERSION."
+            " RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION."
         )
         sys.exit(1)
 
@@ -44,9 +42,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
             HIST_CSV = {config_map["HIST_CSV"]}
             RESERVE_STRAT = {config_map["RESERVE_STRAT"]}
             ESTIMATE_STRAT = {config_map["ESTIMATE_STRAT"]}
-            O_VERSION = {config_map["O_VERSION"]}
             I_VERSION = {config_map["I_VERSION"]}
-            ALLOCATE_VERSION = {config_map["ALLOCATE_VERSION"]}
             EXPECTED_ACTIVE_VAULTS = {config_map["EXPECTED_ACTIVE_VAULTS"]}
             REFILL_PERIOD = {config_map["REFILL_PERIOD"]}
             REFILL_EXCESS = {config_map["REFILL_EXCESS"]}
@@ -71,9 +67,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         config_map["HIST_CSV"],
         config_map["RESERVE_STRAT"],
         config_map["ESTIMATE_STRAT"],
-        int(config_map["O_VERSION"]),
         int(config_map["I_VERSION"]),
-        int(config_map["ALLOCATE_VERSION"]),
         int(config_map["CANCEL_COIN_SELECTION"]),
         int(config_map["EXPECTED_ACTIVE_VAULTS"]),
         int(config_map["REFILL_EXCESS"] * config_map["EXPECTED_ACTIVE_VAULTS"]),
@@ -126,9 +120,8 @@ if __name__ == "__main__":
         "HIST_CSV": "../block_fees/historical_fees.csv",
         "RESERVE_STRAT": "CUMMAX95Q90",
         "ESTIMATE_STRAT": "ME30",
-        "O_VERSION": 1,
         "I_VERSION": 2,
-        "ALLOCATE_VERSION": 0,
+        "CANCEL_COIN_SELECTION": 0,
         "EXPECTED_ACTIVE_VAULTS": 5,
         "REFILL_PERIOD": 144 * 7,
         "REFILL_EXCESS": 5,

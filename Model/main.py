@@ -14,9 +14,7 @@ LOCKTIME = os.getenv("LOCKTIME", None)
 HIST_CSV = os.getenv("HIST_CSV", None)
 RESERVE_STRAT = os.getenv("RESERVE_STRAT", None)
 ESTIMATE_STRAT = os.getenv("ESTIMATE_STRAT", None)
-O_VERSION = os.getenv("O_VERSION", None)
 I_VERSION = os.getenv("I_VERSION", None)
-ALLOCATE_VERSION = os.getenv("ALLOCATE_VERSION", None)
 CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", None)
 EXPECTED_ACTIVE_VAULTS = os.getenv("EXPECTED_ACTIVE_VAULTS", None)
 REFILL_EXCESS = os.getenv("REFILL_EXCESS", None)
@@ -42,9 +40,7 @@ if __name__ == "__main__":
         HIST_CSV,
         RESERVE_STRAT,
         ESTIMATE_STRAT,
-        O_VERSION,
         I_VERSION,
-        ALLOCATE_VERSION,
         CANCEL_COIN_SELECTION,
         EXPECTED_ACTIVE_VAULTS,
         REFILL_EXCESS,
@@ -55,11 +51,10 @@ if __name__ == "__main__":
     ]
     if any(v is None for v in req_vars):
         logging.error(
-            "Need all these environment variables to be set: EXPECTED_ACTIVE_VAULTS,"
-            " REFILL_EXCESS, REFILL_PERIOD, DELEGATION_PERIOD, INVALID_SPEND_RATE,"
-            " CATASTROPHE_RATE, N_STK, N_MAN, LOCKTIME, HIST_CSV, RESERVE_STRAT,"
-            " ESTIMATE_STRAT, O_VERSION, I_VERSION, ALLOCATE_VERSION,"
-            " CANCEL_COIN_SELECTION."
+            "Need all these environment variables to be set: N_STK, N_MAN, LOCKTIME,"
+            " HIST_CSV, RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION,"
+            " CANCEL_COIN_SELECTION, EXPECTED_ACTIVE_VAULTS, REFILL_EXCESS,"
+            " REFILL_PERIOD, SPEND_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE."
         )
         sys.exit(1)
     logging.info(f"Config: {', '.join(v for v in req_vars)}")
@@ -70,9 +65,7 @@ if __name__ == "__main__":
         HIST_CSV,
         RESERVE_STRAT,
         ESTIMATE_STRAT,
-        int(O_VERSION),
         int(I_VERSION),
-        int(ALLOCATE_VERSION),
         int(CANCEL_COIN_SELECTION),
         int(EXPECTED_ACTIVE_VAULTS),
         int(REFILL_EXCESS),

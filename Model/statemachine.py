@@ -225,9 +225,7 @@ class StateMachine:
         hist_feerate_csv,
         reserve_strat,
         estimate_strat,
-        o_version,
         i_version,
-        allocate_version,
         cancel_coin_selec,
     ):
         self.n_stk = n_stk
@@ -247,9 +245,7 @@ class StateMachine:
         # analysis strategy over historical feerates for Vm
         self.estimate_strat = estimate_strat
 
-        self.O_version = o_version
         self.I_version = i_version
-        self.allocate_version = allocate_version
         self.cancel_coin_selection = cancel_coin_selec
 
         self.vb_coins_count = 8
@@ -428,33 +424,8 @@ class StateMachine:
         These coins are needed to be able to Cancel up the reserve feerate, but
         not usually optimal during normal operations.
         """
-        if self.O_version == 0:
-            vb = self.Vb(block_height)
-            return [vb] * self.vb_coins_count
-
-        # Strategy 1
-        # dist = [Vm, MVm, 2MVm, 3MVm, ...]
-        if self.O_version == 1:
-            reserve_feerate = self._feerate_reserve_per_vault(block_height)
-            fbcoin_cost = int(reserve_feerate * P2WPKH_INPUT_SIZE)
-            frpv = self.fee_reserve_per_vault(block_height)
-            Vm = self.Vm(block_height)
-            M = self.vm_factor  # Factor increase per coin
-            dist = [Vm]
-            while sum(dist) < frpv - len(dist) * fbcoin_cost:
-                dist.append(int((len(dist)) * M * Vm + fbcoin_cost))
-            diff = sum(dist) - frpv - int(len(dist) * fbcoin_cost)
-            # find the minimal subset sum of elements that is greater than diff, and remove them
-            subset = []
-            while sum(subset) < diff:
-                subset.append(dist.pop())
-            excess = sum(subset) - diff
-            assert isinstance(excess, int)
-            if excess >= Vm + fbcoin_cost:
-                dist.append(excess + fbcoin_cost)
-            else:
-                dist[-1] += excess
-            return dist
+        vb = self.Vb(block_height)
+        return [vb] * self.vb_coins_count
 
     def coins_dist_bonus(self, block_height):
         """The coin amount distribution used to reduce overpayments.
@@ -833,7 +804,7 @@ class StateMachine:
             return True
         return False
 
-    def _allocate_0(self, vault_id, amount, block_height):
+    def allocate(self, vault_id, amount, block_height):
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
@@ -944,10 +915,6 @@ class StateMachine:
             f"    Reserve for vault {vault.id} has excess of"
             f" {vault.reserve_balance() - required_reserve}"
         )
-
-    def allocate(self, vault_id, amount, block_height):
-        if self.allocate_version == 0:
-            self._allocate_0(vault_id, amount, block_height)
 
     def broadcast_cancel(self, vault_id, block_height):
         """Construct and broadcast the cancel tx.
@@ -1190,9 +1157,7 @@ if __name__ == "__main__":
         hist_feerate_csv="historical_fees.csv",
         reserve_strat="CUMMAX95Q90",
         estimate_strat="ME30",
-        o_version=1,
         i_version=2,
-        allocate_version=1,
     )
 
     sm.refill(500000)
