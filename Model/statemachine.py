@@ -672,6 +672,9 @@ class StateMachine:
         dist_bonu_size = P2WPKH_OUTPUT_SIZE * len(dist_bonus)
         dist_bonu_fees = int(dist_bonu_size * feerate)
         dist_bonu_cost = sum(dist_bonus) + dist_bonu_fees
+        # The cost of a change output should we need to add one
+        change_size = P2WPKH_OUTPUT_SIZE
+        change_fee = P2WPKH_OUTPUT_SIZE * feerate
         # Add new distributions of coins to the CF until we can't afford it anymore
         total_to_consume = sum(c.amount for c in coins)
         num_new_reserves = 0
@@ -687,13 +690,15 @@ class StateMachine:
             # Don't create a too large tx, instead add a change output (always
             # smaller than dist_rese_size) to be processed by a latter CF tx.
             if cf_size + dist_rese_size > MAX_TX_SIZE:
+                assert cf_size + change_size <= MAX_TX_SIZE, "No room for change output"
                 added_coins.append(
                     self.coin_pool.add_coin(
-                        total_to_consume
-                        - consumed,  # - P2WPKH_OUTPUT_SIZE*feerate FIXME
+                        total_to_consume - consumed - change_fee,
                         processing_state=ProcessingState.UNPROCESSED,
                     )
                 )
+                cf_size += change_size
+                cf_tx_fee += change_fee
                 break
             consumed += dist_rese_cost
             cf_size += dist_rese_size
@@ -714,13 +719,15 @@ class StateMachine:
             # Don't create a too large tx, instead add a change output (always
             # smaller than dist_rese_size) to be processed by a latter CF tx.
             if cf_size + dist_bonu_size > MAX_TX_SIZE:
+                assert cf_size + change_size <= MAX_TX_SIZE, "No room for change output"
                 added_coins.append(
                     self.coin_pool.add_coin(
-                        total_to_consume
-                        - consumed,  # - P2WPKH_OUTPUT_SIZE*feerate FIXME
+                        total_to_consume - consumed - change_fee,
                         processing_state=ProcessingState.UNPROCESSED,
                     )
                 )
+                cf_size += change_size
+                cf_tx_fee += change_fee
                 break
             consumed += dist_bonu_cost
             cf_size += dist_bonu_size
