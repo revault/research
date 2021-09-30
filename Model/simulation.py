@@ -320,7 +320,8 @@ class Simulation(object):
         # Compute overpayments
         if self.with_overpayments:
             feerate = self.wt.next_block_feerate(block_height)
-            self.overpayments.append([block_height, self.cancel_fee - feerate])
+            needed_fee = self.wt.cancel_tx_fee(feerate, len(cancel_inputs))
+            self.overpayments.append([block_height, self.cancel_fee - needed_fee])
 
     def catastrophe_sequence(self, block_height):
         if len(self.wt.list_available_vaults()) == 0:
