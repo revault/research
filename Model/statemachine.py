@@ -1033,14 +1033,20 @@ class StateMachine:
         def coin_sum(coins):
             return sum(c.amount for c in coins)
 
+        def select_coins(coins):
+            for coin in coins:
+                logging.debug(f"        removing coin: {coin} to add to new cancel tx")
+                self.remove_coin(coin)
+            return coins
+
         # First check if the needed amount is very low, in which case we don't
         # even need a Vb coin.
         if vb_coins[0].amount > needed_fee + txin_cost:
             # TODO: the number of vm coins is always low, we could do an exhaustive search.
             for i in range(1, len(vm_coins)):
                 if coin_sum(vm_coins[:i]) >= needed_fee + txin_cost * i:
-                    return vm_coins[:i]
-            return [vb_coins[0]]
+                    return select_coins(vm_coins[:i])
+            return select_coins([vb_coins[0]])
 
         # Then gather enough vb coins
         picked_vb_coins = []
@@ -1059,18 +1065,18 @@ class StateMachine:
         rem_fee = needed_fee - paid
         for i in range(len(vm_coins)):
             if coin_sum(vm_coins[:i]) >= rem_fee + txin_cost * i:
-                return picked_vb_coins + vm_coins[:i]
+                return select_coins(picked_vb_coins + vm_coins[:i])
 
         # All Vm coins couldn't fill the gap? Fall back to use only Vb coins
-        if len(coins) < len(vb_coins):
+        if len(picked_vb_coins) < len(vb_coins):
             for i in range(1, len(vb_coins)):
                 if coin_sum(vb_coins[:i]) > needed_fee + txin_cost * i:
-                    return vb_coins[:i]
+                    return select_coins(vb_coins[:i])
 
         logging.error(
             f"Not enough reserve to pay for cancel fee ({needed_fee} sats) at feerate {feerate}",
         )
-        return vb_coins + vm_coins
+        return select_coins(vb_coins + vm_coins)
 
     def finalize_cancel(self, tx, height):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
@@ -1080,6 +1086,7 @@ class StateMachine:
             self.remove_vault(self.vaults[tx.vault_id])
             self.mempool.remove(tx)
         else:
+            logging.debug(f"    Confirmation failed...")
             self.maybe_replace_cancel(height, tx)
 
     def maybe_replace_cancel(self, height, tx):
@@ -1091,10 +1098,11 @@ class StateMachine:
         new_feerate = self.next_block_feerate(height)
 
         logging.debug(
-            f"Checking if we need feebump Cancel tx for vault {vault.id}."
-            f" Tx feerate: {tx.feerate()}, next block feerate: {new_feerate}"
+            f"    Checking if we need to replace Cancel tx for vault {vault.id}."
+            f" Current feerate: {tx.feerate()}, next block feerate: {new_feerate}"
         )
         if new_feerate > tx.feerate():
+            logging.debug(f"    Replacing Cancel tx...")
             new_fee = self.cancel_tx_fee(new_feerate, 0)
             # Bitcoin Core policy is set to 1, take some leeway by setting
             # it to 2.
@@ -1118,13 +1126,6 @@ class StateMachine:
                 coins = self.cancel_coin_selec_0(vault, needed_fee, new_feerate)
             elif self.cancel_coin_selection == 1:
                 coins = self.cancel_coin_selec_1(vault, needed_fee, new_feerate)
-
-            # Deallocate the coins from the first tx that were not chosen in
-            # the bump tx.
-            for coin in tx.fbcoins:
-                if coin not in coins:
-                    vault.deallocate_coin(coin)
-                    self.coin_pool.deallocate_coin(coin)
 
             self.mempool.append(CancelTx(height, vault.id, self.cancel_vbytes(), coins))
 
