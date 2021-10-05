@@ -77,7 +77,7 @@ if __name__ == "__main__":
         # with_fb_coins_dist=True,
         with_cum_op_cost=True,
         with_divergence=True,
-        # with_overpayments=True,
+        with_overpayments=True,
     )
 
     start_block = 350000

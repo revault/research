@@ -8,6 +8,7 @@ TODO:
     - could break with certain DELEGATION_PERIODs. 
 """
 
+import bisect
 import itertools
 import logging
 import numpy as np
@@ -115,6 +116,9 @@ class FeebumpCoin:
 
     def __repr__(self):
         return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block}, state={self.processing_state})"
+
+    def __lt__(a, b):
+        return a.amount < b.amount
 
     def is_confirmed(self):
         """Whether this coin was fanned out and confirmed"""
@@ -997,45 +1001,82 @@ class StateMachine:
         return coins
 
     def cancel_coin_selec_1(self, vault, needed_fee, feerate):
-        """Select the combination that results in the smallest overpayment"""
-        coins = []
+        """Select the combination of fee-bumping coins that results in the
+        smallest overpayment possible.
 
-        best_combination = None
-        min_fee_added = None
-        max_paying_combination = None
-        max_fee_added = 0
-        allocated_coins = vault.allocated_coins()
-        for candidate in itertools.chain.from_iterable(
-            itertools.combinations(allocated_coins, r)
-            for r in range(1, len(allocated_coins) + 1)
-        ):
-            added_fees = sum(
-                [c.amount - P2WPKH_INPUT_SIZE * feerate for c in candidate]
-            )
-            # In any case record the combination paying the most fees, as a
-            # best effort if we can't afford the whole fee needed.
-            if added_fees > max_fee_added:
-                max_paying_combination = candidate
-                max_fee_added = added_fees
-            # Record the combination overpaying the least
-            if added_fees < needed_fee:
-                continue
-            if min_fee_added is not None and added_fees >= min_fee_added:
-                continue
-            best_combination = candidate
-            min_fee_added = added_fees
+        The UTxO pool is laid out with large coins covering up to the reserve
+        and smaller coins used for a finer grained coin selection to avoid
+        overpayments.
+        First try to find the number of Vb (large) coins needed to cover for
+        the most part of the fees, then fill the gap with Vm (small) coins.
+        """
+        txin_cost = P2WPKH_INPUT_SIZE * feerate
+        allocated_coins = sorted(vault.allocated_coins())
+        # All vb coins are always larger than vm coins (or at least we assume so)
+        vm_coins, vb_coins = (
+            allocated_coins[: -self.vb_coins_count],
+            allocated_coins[-self.vb_coins_count :],
+        )
+        # We often end up with more Vb coins which we would consider to be Vm coins
+        # above. Try to fix this based on their value.
+        while True:
+            # Sanity hard stop
+            if len(vm_coins) <= 6:
+                break
+            coin = vm_coins.pop(-1)
+            if coin.amount >= vb_coins[-1].amount * 0.80:
+                bisect.insort(vb_coins, coin)
+            else:
+                vm_coins.append(coin)
+                break
 
-        combination = best_combination
-        if combination is None:
-            # FIXME: we usually have tons of unallocated coins, can we take some
-            # from there out of emergency?
-            combination = max_paying_combination
-        assert combination is not None
-        for coin in combination:
-            self.remove_coin(coin)
-            coins.append(coin)
+        def coin_sum(coins):
+            return sum(c.amount for c in coins)
 
-        return coins
+        def select_coins(coins):
+            for coin in coins:
+                logging.debug(f"        removing coin: {coin} to add to new cancel tx")
+                self.remove_coin(coin)
+            return coins
+
+        # First check if the needed amount is very low, in which case we don't
+        # even need a Vb coin.
+        if vb_coins[0].amount > needed_fee + txin_cost:
+            # TODO: the number of vm coins is always low, we could do an exhaustive search.
+            for i in range(1, len(vm_coins)):
+                if coin_sum(vm_coins[:i]) >= needed_fee + txin_cost * i:
+                    return select_coins(vm_coins[:i])
+            return select_coins([vb_coins[0]])
+
+        # Then gather enough vb coins
+        picked_vb_coins = []
+        paid = 0
+        for i in range(1, len(vb_coins)):
+            coin = vb_coins[-i]
+            if needed_fee - paid < coin.amount - txin_cost:
+                break
+            picked_vb_coins.append(coin)
+            paid += coin.amount - txin_cost
+
+        # And finally fill the gap with small Vm coins. Note we go through the
+        # list in reverse order as the Vm coins amount is increasing.
+        # TODO: figure out why we have less overpayments by going in increasing order
+        # TODO: the number of vm coins is always low, we could do an exhaustive search.
+        rem_fee = needed_fee - paid
+        for i in range(len(vm_coins)):
+            if coin_sum(vm_coins[:i]) >= rem_fee + txin_cost * i:
+                return select_coins(picked_vb_coins + vm_coins[:i])
+
+        # All Vm coins couldn't fill the gap? Fall back to use only Vb coins
+        if len(picked_vb_coins) < len(vb_coins):
+            for i in range(1, len(vb_coins)):
+                if coin_sum(vb_coins[:i]) > needed_fee + txin_cost * i:
+                    return select_coins(vb_coins[:i])
+
+        logging.error(
+            f"Not enough reserve to pay for cancel fee ({needed_fee} sats) at feerate {feerate}",
+        )
+        return select_coins(vb_coins + vm_coins)
 
     def finalize_cancel(self, tx, height):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
@@ -1045,6 +1086,7 @@ class StateMachine:
             self.remove_vault(self.vaults[tx.vault_id])
             self.mempool.remove(tx)
         else:
+            logging.debug(f"    Confirmation failed...")
             self.maybe_replace_cancel(height, tx)
 
     def maybe_replace_cancel(self, height, tx):
@@ -1056,10 +1098,11 @@ class StateMachine:
         new_feerate = self.next_block_feerate(height)
 
         logging.debug(
-            f"Checking if we need feebump Cancel tx for vault {vault.id}."
-            f" Tx feerate: {tx.feerate()}, next block feerate: {new_feerate}"
+            f"    Checking if we need to replace Cancel tx for vault {vault.id}."
+            f" Current feerate: {tx.feerate()}, next block feerate: {new_feerate}"
         )
         if new_feerate > tx.feerate():
+            logging.debug(f"    Replacing Cancel tx...")
             new_fee = self.cancel_tx_fee(new_feerate, 0)
             # Bitcoin Core policy is set to 1, take some leeway by setting
             # it to 2.
@@ -1083,13 +1126,6 @@ class StateMachine:
                 coins = self.cancel_coin_selec_0(vault, needed_fee, new_feerate)
             elif self.cancel_coin_selection == 1:
                 coins = self.cancel_coin_selec_1(vault, needed_fee, new_feerate)
-
-            # Deallocate the coins from the first tx that were not chosen in
-            # the bump tx.
-            for coin in tx.fbcoins:
-                if coin not in coins:
-                    vault.deallocate_coin(coin)
-                    self.coin_pool.deallocate_coin(coin)
 
             self.mempool.append(CancelTx(height, vault.id, self.cancel_vbytes(), coins))
 
