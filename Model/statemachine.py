@@ -112,7 +112,10 @@ class FeebumpCoin:
         self.fan_block = fan_block
 
     def __repr__(self):
-        return f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block}, state={self.processing_state})"
+        return (
+            f"Coin(id={self.id}, amount={self.amount}, fan_block={self.fan_block},"
+            f" state={self.processing_state})"
+        )
 
     def __lt__(a, b):
         return a.amount < b.amount
@@ -883,8 +886,7 @@ class StateMachine:
                     )
                 except (StopIteration):
                     logging.debug(
-                        f"    No coin found with amount = {x} with tolerance"
-                        f" {tol*100}%"
+                        f"    No coin found with amount = {x} with tolerance {tol*100}%"
                     )
                     not_found.append(x)
                     continue
@@ -905,9 +907,10 @@ class StateMachine:
                 if vault.reserve_balance() >= required_reserve:
                     break
 
-        assert (
-            vault.reserve_balance() >= required_reserve
-        ), f"Was checked before searching, {vault.reserve_balance()} vs {required_reserve}"
+        assert vault.reserve_balance() >= required_reserve, (
+            f"Was checked before searching, {vault.reserve_balance()} vs"
+            f" {required_reserve}"
+        )
 
         # Now we have enough coins for the required reserve we can look for
         # coins in the bonus reserve
@@ -942,7 +945,12 @@ class StateMachine:
 
         vault.set_status(VaultState.CANCELING)
         self.mempool.append(
-            CancelTx(block_height, vault.id, self.cancel_vbytes(), cancel_fb_inputs)
+            CancelTx(
+                block_height,
+                vault.id,
+                self.cancel_vbytes() + len(cancel_fb_inputs) * P2WPKH_INPUT_SIZE,
+                cancel_fb_inputs,
+            )
         )
 
         return cancel_fb_inputs
@@ -987,8 +995,8 @@ class StateMachine:
                 fbcoin = reserve[-1]
                 if fbcoin.amount <= fbcoin_cost + self.cancel_tx_fee(feerate, 0):
                     logging.error(
-                        f"Not enough coins to cover for the Cancel fee of "
-                        f"{needed_fee} at feerate {feerate}. Collected {collected_fee} sats."
+                        f"Not enough coins to cover for the Cancel fee of {needed_fee}"
+                        f" at feerate {feerate}. Collected {collected_fee} sats."
                     )
                     break
                 self.remove_coin(fbcoin)
@@ -1071,7 +1079,8 @@ class StateMachine:
                     return select_coins(vb_coins[:i])
 
         logging.error(
-            f"Not enough reserve to pay for cancel fee ({needed_fee} sats) at feerate {feerate}",
+            f"Not enough reserve to pay for cancel fee ({needed_fee} sats) at feerate"
+            f" {feerate}"
         )
         return select_coins(vb_coins + vm_coins)
 
@@ -1082,9 +1091,11 @@ class StateMachine:
         if self.is_tx_confirmed(tx, height):
             self.remove_vault(self.vaults[tx.vault_id])
             self.mempool.remove(tx)
+            return True
         else:
             logging.debug(f"    Confirmation failed...")
             self.maybe_replace_cancel(height, tx)
+            return False
 
     def maybe_replace_cancel(self, height, tx):
         """Broadcasts a replacement cancel transaction if feerate increased.
@@ -1120,11 +1131,22 @@ class StateMachine:
 
             # Push a new tx with coins selected to meet the new fee
             if self.cancel_coin_selection == 0:
-                coins = self.cancel_coin_selec_0(vault, needed_fee, new_feerate)
+                cancel_fb_inputs = self.cancel_coin_selec_0(
+                    vault, needed_fee, new_feerate
+                )
             elif self.cancel_coin_selection == 1:
-                coins = self.cancel_coin_selec_1(vault, needed_fee, new_feerate)
+                cancel_fb_inputs = self.cancel_coin_selec_1(
+                    vault, needed_fee, new_feerate
+                )
 
-            self.mempool.append(CancelTx(height, vault.id, self.cancel_vbytes(), coins))
+            self.mempool.append(
+                CancelTx(
+                    height,
+                    vault.id,
+                    self.cancel_vbytes() + len(cancel_fb_inputs) * P2WPKH_INPUT_SIZE,
+                    cancel_fb_inputs,
+                )
+            )
 
     def spend(self, vault_id, height):
         """Handle a broadcasted Spend transaction.

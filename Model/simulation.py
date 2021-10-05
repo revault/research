@@ -343,7 +343,16 @@ class Simulation(object):
                     self.cf_fee += cf_fee
             elif isinstance(tx, CancelTx):
                 logging.debug(f"  Cancel confirm transition at block {height}")
-                self.wt.finalize_cancel(tx, height)
+                confirmed = self.wt.finalize_cancel(tx, height)
+
+                # Compute overpayments
+                if self.with_overpayments:
+                    if confirmed:
+                        feerate = self.wt.next_block_feerate(height)
+                        needed_fee = self.wt.cancel_tx_fee(feerate, len(tx.fbcoins))
+                        # Note: negative overpayments (underpayments) possible if minfee for block was 0
+                        self.overpayments.append([height, tx.fee - needed_fee])
+
             else:
                 raise
 
