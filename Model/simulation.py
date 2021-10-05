@@ -316,12 +316,6 @@ class Simulation(object):
             amounts = [coin.amount for coin in self.wt.list_coins()]
             self.pool_after_cancel.append([block_height, amounts])
 
-        # Compute overpayments
-        if self.with_overpayments:
-            feerate = self.wt.next_block_feerate(block_height)
-            needed_fee = self.wt.cancel_tx_fee(feerate, len(cancel_inputs))
-            self.overpayments.append([block_height, self.cancel_fee - needed_fee])
-
     def catastrophe_sequence(self, block_height):
         if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
@@ -381,7 +375,16 @@ class Simulation(object):
                     self.cf_fee += cf_fee
             elif isinstance(tx, CancelTx):
                 logging.debug(f"  Cancel confirm transition at block {height}")
-                self.wt.finalize_cancel(tx, height)
+                confirmed = self.wt.finalize_cancel(tx, height)
+
+                # Compute overpayments
+                if self.with_overpayments:
+                    if confirmed:
+                        feerate = self.wt.next_block_feerate(height)
+                        needed_fee = self.wt.cancel_tx_fee(feerate, len(tx.fbcoins))
+                        # Note: negative overpayments (underpayments) possible if minfee for block was 0
+                        self.overpayments.append([height, tx.fee - needed_fee])
+
             else:
                 raise
 
