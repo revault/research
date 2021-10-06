@@ -303,6 +303,13 @@ class StateMachine:
                 .quantile(quantile=0.95, interpolation="linear")
                 .cummax()
             )
+        elif self.reserve_strat == "CUMMAX95Q1":
+            self.hist_df["CUMMAX95Q1"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(144, min_periods=14)
+                .quantile(quantile=0.95, interpolation="linear")
+                .cummax()
+            )
         else:
             raise ValueError("Reserve strategy not implemented")
 
