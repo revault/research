@@ -21,7 +21,7 @@ REFILL_EXCESS = os.getenv("REFILL_EXCESS", None)
 REFILL_PERIOD = os.getenv("REFILL_PERIOD", None)
 # Unvault rate per day
 UNVAULT_RATE = os.getenv("UNVAULT_RATE", None)
-# Invalid rate per spend
+# Invalid rate per unvault
 INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", None)
 # Catastrophe rate per day
 CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", None)
@@ -77,10 +77,15 @@ if __name__ == "__main__":
         float(CATASTROPHE_RATE),
         float(DELEGATE_RATE) if DELEGATE_RATE is not None else None,
         with_balance=True,
-        # with_fb_coins_dist=True,
-        with_cum_op_cost=True,
-        with_divergence=True,
-        with_overpayments=True,
+        with_divergence=False,
+        with_op_cost=False,
+        with_cum_op_cost=False,
+        with_overpayments=False,
+        with_coin_pool=True,
+        with_coin_pool_age=True,
+        with_risk_status=False,
+        with_risk_time=False,
+        with_fb_coins_dist=True,
     )
 
     start_block = 350000
