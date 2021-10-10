@@ -25,6 +25,8 @@ UNVAULT_RATE = os.getenv("UNVAULT_RATE", None)
 INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", None)
 # Catastrophe rate per day
 CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", None)
+# Delegate rate per day (if scale_fixed)
+DELEGATE_RATE = os.getenv("DELEGATE_RATE", None)
 
 if __name__ == "__main__":
     random.seed(21000000)
@@ -48,12 +50,13 @@ if __name__ == "__main__":
         UNVAULT_RATE,
         INVALID_SPEND_RATE,
         CATASTROPHE_RATE,
+        DELEGATE_RATE,
     ]
     if any(v is None for v in req_vars):
         logging.error(
             "Need all these environment variables to be set: N_STK, N_MAN, LOCKTIME,"
             " HIST_CSV, RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION,"
-            " CANCEL_COIN_SELECTION, NUMBER_VAULTS, REFILL_EXCESS,"
+            " CANCEL_COIN_SELECTION, NUMBER_VAULTS, REFILL_EXCESS, DELEGATE_RATE, "
             " REFILL_PERIOD, UNVAULT_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE."
         )
         sys.exit(1)
@@ -73,6 +76,7 @@ if __name__ == "__main__":
         float(UNVAULT_RATE),
         float(INVALID_SPEND_RATE),
         float(CATASTROPHE_RATE),
+        float(DELEGATE_RATE),
         with_balance=True,
         # with_fb_coins_dist=True,
         with_cum_op_cost=True,

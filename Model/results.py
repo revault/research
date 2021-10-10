@@ -25,13 +25,15 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         "UNVAULT_RATE",
         "INVALID_SPEND_RATE",
         "CATASTROPHE_RATE",
+        "DELEGATE_RATE",
+        "CANCEL_COIN_SELECTION",
     ]
     if study_type not in req_types:
         logging.error(
             "Study requires a type from: NUMBER_VAULTS,"
-            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, UNVAULT_RATE,"
+            " REFILL_EXCESS, REFILL_PERIOD, REFILL_EXCESS, UNVAULT_RATE, DELEGATE_RATE"
             " INVALID_SPEND_RATE, CATASTROPHE_RATE, N_STK, N_MAN, HIST_CSV,"
-            " RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION."
+            " RESERVE_STRAT, ESTIMATE_STRAT, I_VERSION, CANCEL_COIN_SELECTION."
         )
         sys.exit(1)
 
@@ -50,6 +52,8 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
             UNVAULT_RATE = {config_map["UNVAULT_RATE"]}
             INVALID_SPEND_RATE = {config_map["INVALID_SPEND_RATE"]}
             CATASTROPHE_RATE = {config_map["CATASTROPHE_RATE"]}
+            DELEGATE_RATE = {config_map["DELEGATE_RATE"]}
+            CANCEL_COIN_SELECTION = {config_map["CANCEL_COIN_SELECTION"]}
         """
     )
 
@@ -76,6 +80,7 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         int(config_map["UNVAULT_RATE"]),
         float(config_map["INVALID_SPEND_RATE"]),
         float(config_map["CATASTROPHE_RATE"]),
+        float(config_map["DELEGATE_RATE"]),
         with_balance=True,
         with_divergence=True,
         with_cum_op_cost=True,
@@ -126,9 +131,10 @@ if __name__ == "__main__":
         "REFILL_EXCESS": 1,
         "UNVAULT_RATE": 1,
         "DELEGATE_RATE": 1,
+        "CANCEL_COIN_SELECTION": 0,
         "INVALID_SPEND_RATE": 0.1,
         "CATASTROPHE_RATE": 0.005,
-        "CANCEL_COIN_SELECTION": 0,
+        "DELEGATE_RATE": 1,
     }
 
     # Set the study parameters
