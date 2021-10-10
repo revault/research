@@ -390,7 +390,8 @@ class Simulation(object):
         """
         self.start_block, self.end_block = start_block, end_block
         self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
-        switch = "good"
+        # A switch we use to determine whether we are under requirements
+        is_risky = False
 
         # At startup allocate as many reserves as we expect to have vaults
         logging.info(
@@ -487,23 +488,21 @@ class Simulation(object):
 
             if self.with_cum_op_cost:
                 # Check if wt becomes risky
-                if switch == "good":
+                if not is_risky:
                     for vault in self.wt.list_available_vaults():
                         if self.wt.under_requirement(vault, block):
-                            switch = "bad"
+                            is_risky = True
                             break
-                    if switch == "bad":
+                    if is_risky:
                         risk_on = block
-
                 # Check if wt no longer risky
-                if switch == "bad":
-                    any_risk = []
-                    for vault in self.wt.list_available_vaults():
-                        if self.wt.under_requirement(vault, block):
-                            any_risk.append(True)
-                            break
-                    if True not in any_risk:
-                        switch = "good"
+                else:
+                    any_risky = any(
+                        self.wt.under_requirement(v, block)
+                        for v in self.wt.list_available_vaults()
+                    )
+                    if any_risky:
+                        is_risky = False
                         risk_off = block
                         self.wt_risk_time.append((risk_on, risk_off))
 
