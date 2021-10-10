@@ -335,11 +335,10 @@ class Simulation(object):
             # If a cancel fee has already been paid this block, sum those fees
             # so that when plotting costs this will appear as one total operation
             # rather than several separate cancel operations
-            try:
-                cancel_fee = sum(coin.amount for coin in cancel_inputs)
+            cancel_fee = sum(coin.amount for coin in cancel_inputs)
+            if self.cancel_fee is not None:
                 self.cancel_fee += cancel_fee
-            except (TypeError):
-                cancel_fee = sum(coin.amount for coin in cancel_inputs)
+            else:
                 self.cancel_fee = cancel_fee
             logging.info(
                 f"  Cancel transition with vault {vault.id} for fee: {cancel_fee}"
@@ -476,15 +475,11 @@ class Simulation(object):
                 self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
 
             if self.with_coin_pool_age:
-                try:
-                    processed = [
-                        coin for coin in self.wt.list_coins() if coin.is_processed()
-                    ]
-                    ages = [block - coin.fan_block for coin in processed]
-                    age = sum(ages)
-                    self.coin_pool_age.append([block, age])
-                except:
-                    pass  # If processed is empty, error raised
+                processed = [
+                    coin for coin in self.wt.list_coins() if coin.is_confirmed()
+                ]
+                age = sum([block - coin.fan_block for coin in processed])
+                self.coin_pool_age.append([block, age])
 
             if self.with_cum_op_cost:
                 was_risky = is_risky
