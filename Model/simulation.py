@@ -14,6 +14,7 @@ from utils import (
     BLOCKS_PER_DAY,
     REFILL_TX_SIZE,
     MAX_TX_SIZE,
+    VAULT_AMOUNT,
 )
 
 
@@ -250,13 +251,12 @@ class Simulation(object):
 
         # Allocation transition
         # Delegate a vault
-        amount = int(10e10)  # 100 BTC
         vault_id = self.new_vault_id()
         logging.info(
             f"  Allocation transition at block {block_height} to vault {vault_id}"
         )
         try:
-            self.wt.allocate(vault_id, amount, block_height)
+            self.wt.allocate(vault_id, VAULT_AMOUNT, block_height)
             self.delegation_successes += 1
         except AllocationError as e:
             logging.error(
@@ -410,9 +410,8 @@ class Simulation(object):
                 # We always try to keep the number of expected vaults under watch. We might
                 # not be able to allocate if a CF tx is pending but not yet confirmed.
                 for i in range(len(self.wt.list_vaults()), self.num_vaults):
-                    amount = int(10e10)  # 100 BTC
                     try:
-                        self.wt.allocate(self.new_vault_id(), amount, block)
+                        self.wt.allocate(self.new_vault_id(), VAULT_AMOUNT, block)
                     except AllocationError as e:
                         logging.error(
                             "Not enough funds to allocate all the expected vaults at"
