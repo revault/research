@@ -487,24 +487,17 @@ class Simulation(object):
                     pass  # If processed is empty, error raised
 
             if self.with_cum_op_cost:
-                # Check if wt becomes risky
-                if not is_risky:
-                    for vault in self.wt.list_available_vaults():
-                        if self.wt.under_requirement(vault, block):
-                            is_risky = True
-                            break
-                    if is_risky:
-                        risk_on = block
-                # Check if wt no longer risky
-                else:
-                    any_risky = any(
-                        self.wt.under_requirement(v, block)
-                        for v in self.wt.list_available_vaults()
-                    )
-                    if any_risky:
-                        is_risky = False
-                        risk_off = block
-                        self.wt_risk_time.append((risk_on, risk_off))
+                was_risky = is_risky
+                is_risky = any(
+                    self.wt.under_requirement(v, block)
+                    for v in self.wt.list_available_vaults()
+                )
+                # If its state changed, record the block
+                if not was_risky and is_risky:
+                    risk_on = block
+                elif was_risky and not is_risky:
+                    risk_off = block
+                    self.wt_risk_time.append((risk_on, risk_off))
 
             if self.with_divergence or self.with_risk_status:
                 self._reserve_divergence(block)
