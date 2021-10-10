@@ -74,7 +74,6 @@ class Simulation(object):
             i_version,
             cancel_coin_selec,
         )
-        self.vault_count = 0
         self.vault_id = 0
 
         # Simulation configuration
@@ -420,7 +419,6 @@ class Simulation(object):
                             f" block {block}: {str(e)}"
                         )
                         break
-                    self.vault_count += 1
 
             # Refill once per refill period
             if block % self.refill_period == 0:
