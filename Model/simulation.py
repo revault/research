@@ -41,7 +41,6 @@ class Simulation(object):
         invalid_spend_rate,
         catastrophe_rate,
         delegate_rate,
-        with_scale_fixed=True,
         with_balance=False,
         with_divergence=False,
         with_op_cost=False,
@@ -103,7 +102,7 @@ class Simulation(object):
         self.fb_coins_dist = []
         self.vm_values = []
         self.vb_values = []
-        self.scale_fixed = with_scale_fixed
+        self.scale_fixed = delegate_rate is None
 
         # Simulation report
         self.delegation_failures = 0
@@ -984,7 +983,6 @@ if __name__ == "__main__":
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
         delegate_rate=1,
-        with_scale_fixed=True,
         with_balance=True,
         with_divergence=True,
         with_op_cost=False,
