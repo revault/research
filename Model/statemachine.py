@@ -264,11 +264,7 @@ class StateMachine:
         # Prepare the rolling stats
         thirty_days = 144 * 30
         ninety_days = 144 * 90
-        self.hist_df["85Q1H"] = (
-            self.hist_df["mean_feerate"]
-            .rolling(6, min_periods=1)
-            .quantile(quantile=0.85, interpolation="linear")
-        )
+
         if self.estimate_strat == "MA30":
             self.hist_df["MA30"] = (
                 self.hist_df["mean_feerate"]
@@ -281,7 +277,13 @@ class StateMachine:
                 .rolling(thirty_days, min_periods=144)
                 .median()
             )
-        elif self.estimate_strat != "85Q1H":
+        elif self.estimate_strat == "85Q1H":
+            self.hist_df["85Q1H"] = (
+                self.hist_df["mean_feerate"]
+                .rolling(6, min_periods=1)
+                .quantile(quantile=0.85, interpolation="linear")
+            )
+        else:
             raise ValueError("Estimate strategy not implemented")
 
         if self.reserve_strat == "95Q30":

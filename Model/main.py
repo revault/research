@@ -8,23 +8,23 @@ from simulation import Simulation
 REPORT_FILENAME = os.getenv("REPORT_FILENAME", None)
 PLOT_FILENAME = os.getenv("PLOT_FILENAME", None)
 PROFILE_FILENAME = os.getenv("PROFILE_FILENAME", None)
-N_STK = os.getenv("N_STK", None)
-N_MAN = os.getenv("N_MAN", None)
-LOCKTIME = os.getenv("LOCKTIME", None)
-HIST_CSV = os.getenv("HIST_CSV", None)
-RESERVE_STRAT = os.getenv("RESERVE_STRAT", None)
-ESTIMATE_STRAT = os.getenv("ESTIMATE_STRAT", None)
-I_VERSION = os.getenv("I_VERSION", None)
-CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", None)
-NUMBER_VAULTS = os.getenv("NUMBER_VAULTS", None)
-REFILL_EXCESS = os.getenv("REFILL_EXCESS", None)
-REFILL_PERIOD = os.getenv("REFILL_PERIOD", None)
+N_STK = os.getenv("N_STK", 7)
+N_MAN = os.getenv("N_MAN", 3)
+LOCKTIME = os.getenv("LOCKTIME", 24)
+HIST_CSV = os.getenv("HIST_CSV", "../block_fees/historical_fees.csv")
+RESERVE_STRAT = os.getenv("RESERVE_STRAT", "CUMMAX95Q90")
+ESTIMATE_STRAT = os.getenv("ESTIMATE_STRAT", "85Q1H")
+I_VERSION = os.getenv("I_VERSION", 3)
+CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", 1)
+NUMBER_VAULTS = os.getenv("NUMBER_VAULTS", 20)
+REFILL_EXCESS = os.getenv("REFILL_EXCESS", 2)
+REFILL_PERIOD = os.getenv("REFILL_PERIOD", 1008)
 # Unvault rate per day
-UNVAULT_RATE = os.getenv("UNVAULT_RATE", None)
+UNVAULT_RATE = os.getenv("UNVAULT_RATE", 1)
 # Invalid rate per unvault
-INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", None)
+INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", 0.01)
 # Catastrophe rate per day
-CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", None)
+CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", 0.001)
 # Delegate rate per day (if not running at fixed scale)
 DELEGATE_RATE = os.getenv("DELEGATE_RATE", None)
 
@@ -44,8 +44,6 @@ if __name__ == "__main__":
     random.seed(21000000)
     # FIXME: make it configurable through command line
     logging.basicConfig(level=logging.DEBUG)
-
-    # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
 
     req_vars = [
         N_STK,
@@ -89,7 +87,7 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    logging.info(f"Config: {', '.join(v for v in req_vars)}")
+    logging.info(f"Config: {', '.join(str(v) for v in req_vars)}")
     sim = Simulation(
         int(N_STK),
         int(N_MAN),
@@ -137,5 +135,3 @@ if __name__ == "__main__":
         if REPORT_FILENAME is not None:
             with open(f"{REPORT_FILENAME}.txt", "w+", encoding="utf-8") as f:
                 f.write(report)
-
-        # sim.plot_fee_history(start_block,end_block, PLOT_FILENAME, True)
