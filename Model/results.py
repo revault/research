@@ -85,6 +85,10 @@ def sim_process(prng_seed, val=None, study_type=None, config_map=None):
         with_divergence=True,
         with_cum_op_cost=True,
         with_risk_status=True,
+        with_op_cost=False,
+        with_overpayments=False,
+        with_risk_time=False,
+        with_fb_coins_dist=False,
     )
     try:
         sim.run(start_block, end_block)

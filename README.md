@@ -6,7 +6,7 @@ The WT wallet model is a statemachine with a few atomic state transitions. Reade
 
 # Running the simulator
 
-The simulator requires all of the following environment variables to be set. 
+The simulator expects all of the following environment variables to be set (except `DELEGATE_RATE`). 
 
 | ENV VAR | Meaning | Value type |
 | --- | --- | --- |
@@ -28,23 +28,23 @@ The simulator requires all of the following environment variables to be set.
 | INVALID_SPEND_RATE | Probability per unvault to trigger a cancel instead of a spend | `float in (0,1)`|
 | CATASTROPHE_RATE | Probability per block to trigger a catastrophe| `float in (0,1)`|
 
+If `DELEGATE_RATE` is not set, the simulation will run at a fixed scale where there is a new vault registration for each unvault. If `DELEGATE_RATE` is set the simulation will register new vaults stochastically, simulating a more dynamic and realistic operation. 
+
 So as an example, one can simulate by navigating to `Model` and running the command:
 
 `PLOT_FILENAME=plot REPORT_FILENAME=out LOCKTIME=24 N_STK=5 N_MAN=3 RESERVE_STRAT=CUMMAX95Q90 ESTIMATE_STRAT=ME30 I_VERSION=3 HIST_CSV=../block_fees/historical_fees.csv NUMBER_VAULTS=5 REFILL_EXCESS=1 REFILL_PERIOD=2016 DELEGATE_RATE=6 UNVAULT_RATE=6 INVALID_SPEND_RATE="0.01" CATASTROPHE_RATE="0.0001" CANCEL_COIN_SELECTION=1 python3 main.py`
 
-To configure which results to plot, you can set the following variables in the `Simulation` instance constructed in `main.py`:
+To control which results to plot, you can set the following environment variables:
 
-```python
-        with_balance=False,
-        with_divergence=False,
-        with_op_cost=False,
-        with_cum_op_cost=False,
-        with_overpayments=False,
-        with_risk_status=False,
-        with_risk_time=False,
-        with_fb_coins_dist=False,
-```
+| ENV VAR | Plot content | Value type |Default value
+| --- | --- | --- | --- |
+|BALANCE|total balance, un-allocated balance, required reserve against time|boolean|True|
+|DIVERGENCE| minimum, maximum and mean divergence of vault reserves from requirement|boolean|False|
+|CUM_OP_COST|cumulative operation cost for cancel, consolidate-fanout and refill transactions|boolean|True|
+|RISK_TIME|highlights CUM_OP_COST plot with time-at-risk|boolean|True|
+|OP_COST| cost per operation for cancel, consolidate-fanout and refill transactions|boolean|False|
+|OVERPAYMENTS|cumulative and individual cancel transaction fee overpayments compared to current fee-rate estimate|boolean|False|
+|RISK_STATUS||risk coefficient against time|boolean|False|
+|FB_COINS_DIST|coin pool distribution (sampled every 10,000 blocks)|boolean|False|
 
-Note that at least two result types are necessary to plot. 
-
-To configure the simulation to run with or without a fixed scale (number of vaults), then set the `with_scale_fixed` variable in the `Simulation` instance constructed in `main.py`. When `with_scale_fixed=True` the `DELEGATE_RATE` environment variable is not used. In that case, there is always a new vault registration for each unvault. `DELEGATE_RATE` is only used when `with_scale_fixed=False` to simulate a more dynamic and realistic operation. 
+Note that at least two plot types are required to run the simulation. 

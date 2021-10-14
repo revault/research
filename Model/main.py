@@ -25,8 +25,20 @@ UNVAULT_RATE = os.getenv("UNVAULT_RATE", None)
 INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", None)
 # Catastrophe rate per day
 CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", None)
-# Delegate rate per day (if scale_is not fixed)
+# Delegate rate per day (if not running at fixed scale)
 DELEGATE_RATE = os.getenv("DELEGATE_RATE", None)
+
+# Plot types
+BALANCE = os.getenv("BALANCE", "true").lower() == "true"
+CUM_OP_COST = os.getenv("CUM_OP_COST", "true").lower() == "true"
+RISK_TIME = (
+    os.getenv("RISK_TIME", "false").lower() == "true" if CUM_OP_COST is True else False
+)
+DIVERGENCE = os.getenv("DIVERGENCE", "false").lower() == "true"
+OP_COST = os.getenv("OP_COST", "false").lower() == "true"
+OVERPAYMENTS = os.getenv("OVERPAYMENTS", "false").lower() == "true"
+RISK_STATUS = os.getenv("RISK_STATUS", "false").lower() == "true"
+FB_COINS_DIST = os.getenv("FB_COINS_DIST", "false").lower() == "true"
 
 if __name__ == "__main__":
     random.seed(21000000)
@@ -59,6 +71,24 @@ if __name__ == "__main__":
             " REFILL_PERIOD, UNVAULT_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE."
         )
         sys.exit(1)
+
+    plot_types = [
+        BALANCE,
+        CUM_OP_COST,
+        DIVERGENCE,
+        OP_COST,
+        OVERPAYMENTS,
+        RISK_STATUS,
+        FB_COINS_DIST,
+    ]
+    if len([plot for plot in plot_types if plot is True]) < 2:
+        logging.error(
+            "Must generate at least two plot types to run simulation. Plot types are:"
+            " BALANCE, CUM_OP_COST, DIVERGENCE, OP_COST, OVERPAYMENTS, RISK_STATUS,"
+            " or FB_COINS_DIST."
+        )
+        sys.exit(1)
+
     logging.info(f"Config: {', '.join(v for v in req_vars)}")
     sim = Simulation(
         int(N_STK),
@@ -76,16 +106,14 @@ if __name__ == "__main__":
         float(INVALID_SPEND_RATE),
         float(CATASTROPHE_RATE),
         float(DELEGATE_RATE) if DELEGATE_RATE is not None else None,
-        with_balance=True,
-        with_divergence=False,
-        with_op_cost=False,
-        with_cum_op_cost=False,
-        with_overpayments=False,
-        with_coin_pool=True,
-        with_coin_pool_age=True,
-        with_risk_status=False,
-        with_risk_time=False,
-        with_fb_coins_dist=True,
+        with_balance=BALANCE,
+        with_divergence=DIVERGENCE,
+        with_op_cost=OP_COST,
+        with_cum_op_cost=CUM_OP_COST,
+        with_risk_time=RISK_TIME,
+        with_overpayments=OVERPAYMENTS,
+        with_risk_status=RISK_STATUS,
+        with_fb_coins_dist=FB_COINS_DIST,
     )
 
     start_block = 350000
