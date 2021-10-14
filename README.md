@@ -4,6 +4,8 @@ In a Revault deployment a watchtower (WT) is relied upon to enforce restrictive 
 
 The WT wallet model is a statemachine with a few atomic state transitions. Readers are referred to the research paper for a detailed discussion. 
 
+The WT achieves its goal to enforce policies by broadcasting a cancel transaction when an unvault attempt breaks the policy. The WT must pay the transaction fee for the cancel transaction at the time of broadcast. The cancel transaction is prepared by stakeholders with `ANYONECANPAY|ALL` signatures to enable the WT to add inputs to bump the transaction fee. The WT must maintain a pool of confirmed coins in order to accurately supplement cancel transaction fees, and it manages its pool of coins with self-paying consolidate-fanout transactions. The operational costs for a WT thus consist of cancel transaction fees, consolidate-fanout transaction fees, and refill transaction fees (paid by the operator).
+
 # Running the simulator
 
 The simulator expects all of the following environment variables to be set (except `DELEGATE_RATE`). 
