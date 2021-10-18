@@ -8,6 +8,8 @@ P2WPKH_OUTPUT_SIZE = 31
 MAX_TX_SIZE = 100_000
 
 BLOCKS_PER_DAY = 144
+COIN = 10 * 10**8
+VAULT_AMOUNT = COIN * 100
 
 # Threshold below which we consider a feebump coin should be consolidated.
 FB_DUST_THRESH = 20_000

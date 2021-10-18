@@ -14,6 +14,7 @@ from utils import (
     BLOCKS_PER_DAY,
     REFILL_TX_SIZE,
     MAX_TX_SIZE,
+    VAULT_AMOUNT,
 )
 
 
@@ -41,7 +42,6 @@ class Simulation(object):
         invalid_spend_rate,
         catastrophe_rate,
         delegate_rate,
-        with_scale_fixed=True,
         with_balance=False,
         with_divergence=False,
         with_op_cost=False,
@@ -75,7 +75,6 @@ class Simulation(object):
             i_version,
             cancel_coin_selec,
         )
-        self.vault_count = 0
         self.vault_id = 0
 
         # Simulation configuration
@@ -103,7 +102,7 @@ class Simulation(object):
         self.fb_coins_dist = []
         self.vm_values = []
         self.vb_values = []
-        self.scale_fixed = with_scale_fixed
+        self.scale_fixed = delegate_rate is None
 
         # Simulation report
         self.delegation_failures = 0
@@ -252,13 +251,12 @@ class Simulation(object):
 
         # Allocation transition
         # Delegate a vault
-        amount = int(10e10)  # 100 BTC
         vault_id = self.new_vault_id()
         logging.info(
             f"  Allocation transition at block {block_height} to vault {vault_id}"
         )
         try:
-            self.wt.allocate(vault_id, amount, block_height)
+            self.wt.allocate(vault_id, VAULT_AMOUNT, block_height)
             self.delegation_successes += 1
         except AllocationError as e:
             logging.error(
@@ -336,11 +334,10 @@ class Simulation(object):
             # If a cancel fee has already been paid this block, sum those fees
             # so that when plotting costs this will appear as one total operation
             # rather than several separate cancel operations
-            try:
-                cancel_fee = sum(coin.amount for coin in cancel_inputs)
+            cancel_fee = sum(coin.amount for coin in cancel_inputs)
+            if self.cancel_fee is not None:
                 self.cancel_fee += cancel_fee
-            except (TypeError):
-                cancel_fee = sum(coin.amount for coin in cancel_inputs)
+            else:
                 self.cancel_fee = cancel_fee
             logging.info(
                 f"  Cancel transition with vault {vault.id} for fee: {cancel_fee}"
@@ -391,7 +388,8 @@ class Simulation(object):
         """
         self.start_block, self.end_block = start_block, end_block
         self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
-        switch = "good"
+        # A switch we use to determine whether we are under requirements
+        is_risky = False
 
         # At startup allocate as many reserves as we expect to have vaults
         logging.info(
@@ -412,16 +410,14 @@ class Simulation(object):
                 # We always try to keep the number of expected vaults under watch. We might
                 # not be able to allocate if a CF tx is pending but not yet confirmed.
                 for i in range(len(self.wt.list_vaults()), self.num_vaults):
-                    amount = int(10e10)  # 100 BTC
                     try:
-                        self.wt.allocate(self.new_vault_id(), amount, block)
+                        self.wt.allocate(self.new_vault_id(), VAULT_AMOUNT, block)
                     except AllocationError as e:
                         logging.error(
                             "Not enough funds to allocate all the expected vaults at"
                             f" block {block}: {str(e)}"
                         )
                         break
-                    self.vault_count += 1
 
             # Refill once per refill period
             if block % self.refill_period == 0:
@@ -476,37 +472,24 @@ class Simulation(object):
                 self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
 
             if self.with_coin_pool_age:
-                try:
-                    processed = [
-                        coin for coin in self.wt.list_coins() if coin.is_processed()
-                    ]
-                    ages = [block - coin.fan_block for coin in processed]
-                    age = sum(ages)
-                    self.coin_pool_age.append([block, age])
-                except:
-                    pass  # If processed is empty, error raised
+                processed = [
+                    coin for coin in self.wt.list_coins() if coin.is_confirmed()
+                ]
+                age = sum([block - coin.fan_block for coin in processed])
+                self.coin_pool_age.append([block, age])
 
             if self.with_cum_op_cost:
-                # Check if wt becomes risky
-                if switch == "good":
-                    for vault in self.wt.list_available_vaults():
-                        if self.wt.under_requirement(vault, block):
-                            switch = "bad"
-                            break
-                    if switch == "bad":
-                        risk_on = block
-
-                # Check if wt no longer risky
-                if switch == "bad":
-                    any_risk = []
-                    for vault in self.wt.list_available_vaults():
-                        if self.wt.under_requirement(vault, block):
-                            any_risk.append(True)
-                            break
-                    if True not in any_risk:
-                        switch = "good"
-                        risk_off = block
-                        self.wt_risk_time.append((risk_on, risk_off))
+                was_risky = is_risky
+                is_risky = any(
+                    self.wt.under_requirement(v, block)
+                    for v in self.wt.list_available_vaults()
+                )
+                # If its state changed, record the block
+                if not was_risky and is_risky:
+                    risk_on = block
+                elif was_risky and not is_risky:
+                    risk_off = block
+                    self.wt_risk_time.append((risk_on, risk_off))
 
             if self.with_divergence or self.with_risk_status:
                 self._reserve_divergence(block)
@@ -984,7 +967,6 @@ if __name__ == "__main__":
         invalid_spend_rate=0.1,
         catastrophe_rate=0.05,
         delegate_rate=1,
-        with_scale_fixed=True,
         with_balance=True,
         with_divergence=True,
         with_op_cost=False,
