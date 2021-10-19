@@ -8,6 +8,8 @@ The WT achieves its goal to enforce policies by broadcasting a cancel transactio
 
 # Running the simulator
 
+## Configuration
+
 The simulator can be configured by setting the following environment variables. 
 
 | ENV VAR | Meaning | Value type |Default value
@@ -32,21 +34,30 @@ The simulator can be configured by setting the following environment variables.
 
 If `DELEGATE_RATE` is not set, the simulation will run at a fixed scale where there is a new vault registration for each unvault. If `DELEGATE_RATE` is set the simulation will register new vaults stochastically, simulating a more dynamic and realistic operation. 
 
-So as an example, one can simulate by navigating to `Model` and running the command:
-
-`PLOT_FILENAME=plot REPORT_FILENAME=out LOCKTIME=12 N_STK=5 N_MAN=2 RESERVE_STRAT=CUMMAX95Q90 ESTIMATE_STRAT=ME30 I_VERSION=3 HIST_CSV=../block_fees/historical_fees.csv NUMBER_VAULTS=5 REFILL_EXCESS=1 REFILL_PERIOD=2016 DELEGATE_RATE=6 UNVAULT_RATE=6 INVALID_SPEND_RATE="0.01" CATASTROPHE_RATE="0.0001" CANCEL_COIN_SELECTION=1 python3 main.py`
-
 To control which results to plot, you can set the following environment variables:
 
 | ENV VAR | Plot content | Value type |Default value
 | --- | --- | --- | --- |
-|BALANCE|total balance, un-allocated balance, required reserve against time|boolean|True|
-|DIVERGENCE| minimum, maximum and mean divergence of vault reserves from requirement|boolean|False|
-|CUM_OP_COST|cumulative operation cost for cancel, consolidate-fanout and refill transactions|boolean|True|
-|RISK_TIME|highlights CUM_OP_COST plot with time-at-risk|boolean|True|
-|OP_COST| cost per operation for cancel, consolidate-fanout and refill transactions|boolean|False|
-|OVERPAYMENTS|cumulative and individual cancel transaction fee overpayments compared to current fee-rate estimate|boolean|False|
-|RISK_STATUS||risk coefficient against time|boolean|False|
-|FB_COINS_DIST|coin pool distribution (sampled every 10,000 blocks)|boolean|False|
+|PLOT_BALANCE|total balance, un-allocated balance, required reserve against time|`0` or `1`|`1`|
+|PLOT_DIVERGENCE| minimum, maximum and mean divergence of vault reserves from requirement|`0` or `1`|`0`|
+|PLOT_CUM_OP_COST|cumulative operation cost for cancel, consolidate-fanout and refill transactions|`0` or `1`|`1`|
+|PLOT_RISK_TIME|highlights PLOT_CUM_PLOT_OP_COST plot with time-at-risk|`0` or `1`|`0`|
+|PLOT_OP_COST| cost per operation for cancel, consolidate-fanout and refill transactions|`0` or `1`|`0`|
+|PLOT_OVERPAYMENTS|cumulative and individual cancel transaction fee overpayments compared to current fee-rate estimate|`0` or `1`|`0`|
+|PLOT_RISK_STATUS||risk coefficient against time|`0` or `1`|`0`|
+|PLOT_FB_COINS_DIST|coin pool distribution (sampled every 10,000 blocks)|`0` or `1`|`0`|
 
 Note that at least two plot types are required to run the simulation. 
+
+## Examples
+
+You can run the `main.py` script with the defaults (by not specifying a configuration) or try one
+of the available examples. For instance the `otc_desk.sh` script simulates the usage of Revault for
+a typical bitcoin retailer:
+```
+cd model/
+./examples/otc_desk.sh
+```
+
+From there explore by tweaking the config as detailed above and report bugs/inconsistencies to our
+[bug tracker](https://github.com/revault/watchtower_paper/issues)!
