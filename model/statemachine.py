@@ -316,6 +316,9 @@ class StateMachine:
     def list_vaults(self):
         return list(self.vaults.values())
 
+    def vaults_count(self):
+        return len(self.vaults)
+
     def list_available_vaults(self):
         return [v for v in self.list_vaults() if v.is_available()]
 
@@ -643,6 +646,7 @@ class StateMachine:
     # FIXME: eventually we should allocate as many outputs as we can, even if
     # it only represents part of a reserve. It would really lower the number
     # of allocation failures.
+    # FIXME: we shouldn't use the next block feerate.
     def broadcast_consolidate_fanout(self, block_height):
         """
         Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
