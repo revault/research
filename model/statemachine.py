@@ -6,9 +6,8 @@ TODO:
 """
 
 import bisect
-import itertools
 import logging
-import numpy as np
+
 from enum import Enum
 from pandas import read_csv
 from transactions import CancelTx, ConsolidateFanoutTx
@@ -18,7 +17,6 @@ from utils import (
     cf_tx_size,
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
-    TX_OVERHEAD_SIZE,
     FB_DUST_THRESH,
 )
 
@@ -258,7 +256,7 @@ class StateMachine:
 
         # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
         self.frpv = (None, None)  # block, value
-        self.Vm_cache = (None, None)  # block, value
+        self.vm_cache = (None, None)  # block, value
         self.feerate = (None, None)  # block, value
 
         # Prepare the rolling stats
@@ -411,15 +409,16 @@ class StateMachine:
         min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
         return tx.feerate() > min_feerate
 
+    # FIXME: cleanup doc, no more the main fb coin
     def Vm(self, block_height):
         """Amount for the main feebump coin"""
-        if self.Vm_cache[0] == block_height:
-            return self.Vm_cache[1]
+        if self.vm_cache[0] == block_height:
+            return self.vm_cache[1]
 
         feerate = self._feerate(block_height)
         vm = int(self.cancel_tx_fee(feerate, 0) + feerate * P2WPKH_INPUT_SIZE)
         assert vm > 0
-        self.Vm_cache = (block_height, vm)
+        self.vm_cache = (block_height, vm)
         return vm
 
     def Vb(self, block_height):
@@ -427,6 +426,7 @@ class StateMachine:
         reserve = self.fee_reserve_per_vault(block_height)
         reserve_rate = self._feerate_reserve_per_vault(block_height)
         vb = reserve / self.vb_coins_count
+        # FIXME make this a constant
         min_vb = self.cancel_tx_fee(5, 0)
         return int(reserve_rate * P2WPKH_INPUT_SIZE + max(vb, min_vb))
 
@@ -504,6 +504,7 @@ class StateMachine:
         assert isinstance(amount, int)
         self.coin_pool.add_coin(amount)
 
+    # FIXME: rename in CF coin selection
     def grab_coins_0(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
