@@ -52,7 +52,7 @@ class Simulation(object):
         with_risk_time=False,
         with_fb_coins_dist=False,
     ):
-        # Stakeholder parameters
+        # Simulation parameters
         self.num_vaults = num_vaults
         self.refill_excess = refill_excess
         self.refill_period = refill_period
@@ -76,7 +76,7 @@ class Simulation(object):
         )
         self.vault_id = 0
 
-        # Simulation configuration
+        # Plots configuration
         self.with_balance = with_balance
         self.balances = []
         self.with_divergence = with_divergence
@@ -134,10 +134,14 @@ class Simulation(object):
         return self.vault_id
 
     def required_reserve(self, block_height):
-        """The amount the WT should have in reserve based on the number of active vaults"""
+        """The absolute amount of sats the WT should have in reserve.
+
+        Note how the required reserve differs from the reserve feerate times the
+        cancel transaction size and the number of vaults: the absolute amount of
+        BTC also accounts for the cost of including a coin in the tx vin.
+        """
         required_reserve = sum(self.wt.coins_dist_reserve(block_height))
-        num_vaults = len(self.wt.list_vaults())
-        return num_vaults * required_reserve
+        return self.wt.vaults_count() * required_reserve
 
     def refill_amount(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
@@ -179,68 +183,63 @@ class Simulation(object):
         refill_amount += cf_fee
         return int(refill_amount)
 
-    def _reserve_divergence(self, block_height):
+    def compute_reserve_divergence(self, block_height):
         """Compute how far the vault's reserves have divereged from the current fee reserve per vault.
         Compute the risk status; the total amount (satoshis) below the required reserve among available vaults."""
         vaults = self.wt.list_available_vaults()
-        if vaults != []:
-            divergence = []
-            required_reserve = sum(self.wt.coins_dist_reserve(block_height))
-            for vault in vaults:
-                div = vault.reserve_balance() - required_reserve
-                divergence.append(div)
-            if self.with_divergence:
-                self.divergence.append(
-                    [
-                        block_height,
-                        sum(divergence) / len(vaults),
-                        min(divergence),
-                        max(divergence),
-                    ]
-                )
+        if len(vaults) == 0 or not (self.with_divergence or self.with_risk_status):
+            return
 
-            if self.with_risk_status:
-                risk_by_vault = [div for div in divergence if div < 0]
-                nominal_risk = sum(risk_by_vault)
-                risk_coefficient = (len(risk_by_vault) / len(vaults)) * nominal_risk
-                self.risk_status.append((block_height, risk_coefficient))
+        divergence = []
+        for vault in vaults:
+            div = vault.reserve_balance() - self.required_reserve(block_height)
+            divergence.append(div)
+        if self.with_divergence:
+            self.divergence.append(
+                [
+                    block_height,
+                    sum(divergence) / len(vaults),
+                    min(divergence),
+                    max(divergence),
+                ]
+            )
+
+        if self.with_risk_status:
+            risk_by_vault = [abs(div) for div in divergence if div < 0]
+            nominal_risk = sum(risk_by_vault)
+            risk_coefficient = len(risk_by_vault) / len(vaults) * nominal_risk
+            self.risk_status.append((block_height, risk_coefficient))
+
+    def broadcast_cf_tx(self, block_height):
+        cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
+        logging.info(
+            f"  Consolidate-fanout transition at block {block_height} with fee:"
+            f" {cf_fee}"
+        )
+        if self.cf_fee is None:
+            self.cf_fee = 0
+        self.cf_fee += cf_fee
 
     def refill_sequence(self, block_height, expected_new_vaults):
         refill_amount = self.refill_amount(block_height, expected_new_vaults)
+        if refill_amount == 0:
+            logging.info("  Refill not required, WT has enough bitcoin")
+            return
 
-        if refill_amount > 0:
-            logging.info(f"Refill sequence at block {block_height}")
-            # Refill transition
-            logging.info(
-                f"  Refill transition at block {block_height} by {refill_amount}"
-            )
-            self.wt.refill(refill_amount)
+        logging.info(f"Refill sequence at block {block_height}")
+        logging.info(f"  Refill transition at block {block_height} by {refill_amount}")
+        self.wt.refill(refill_amount)
 
-            feerate = self.wt.next_block_feerate(block_height)
-            self.refill_fee = REFILL_TX_SIZE * feerate
-
-            # Consolidate-fanout transition
-            # Wait for confirmation of refill, then CF Tx
-            cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
-            logging.info(
-                f"  Consolidate-fanout transition at block {block_height} with fee:"
-                f" {cf_fee}"
-            )
-            if self.cf_fee is None:
-                self.cf_fee = 0
-            self.cf_fee += cf_fee
-
-        else:
-            logging.info(f"  Refill not required, WT has enough bitcoin")
+        feerate = self.wt.next_block_feerate(block_height)
+        self.refill_fee = REFILL_TX_SIZE * feerate
+        self.broadcast_cf_tx(block_height)
 
     def delegate_sequence(self, block_height):
-        # Top up sequence
         # Top up allocations before processing a delegation, because time has passed, and
         # we mustn't accept a delegation if the available coin pool is insufficient.
         self.top_up_sequence(block_height)
 
-        # Allocation transition
-        # Delegate a vault
+        # Try to allocate fb coins from the pool to the new vault.
         vault_id = self.new_vault_id()
         logging.info(
             f"  Allocation transition at block {block_height} to vault {vault_id}"
@@ -255,6 +254,10 @@ class Simulation(object):
             self.delegation_failures += 1
 
     def top_up_sequence(self, block_height):
+        # FIXME: that's ugly and confusing. What happens here is that allocate() will
+        # return early if the vault doesn't need to be allocated, hence not raising. We
+        # should check this here instead.
+
         # loop over copy since allocate may remove an element, changing list index
         for vault in list(self.wt.list_available_vaults()):
             try:
@@ -275,14 +278,12 @@ class Simulation(object):
             raise NoVaultToSpend
 
         vault_id = random.choice(self.wt.list_available_vaults()).id
-        # Spend transition
         logging.info(
             f"  Spend transition with vault {vault_id} at block {block_height}"
         )
         self.wt.spend(vault_id, block_height)
 
     def cancel(self, block_height):
-        logging.info(f"Cancel at block {block_height}")
         if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
@@ -304,9 +305,7 @@ class Simulation(object):
         if len(self.wt.list_available_vaults()) == 0:
             raise NoVaultToSpend
 
-        # Topup sequence
         self.top_up_sequence(block_height)
-
         logging.info(f"Catastrophe sequence at block {block_height}")
         for vault in self.wt.list_available_vaults():
             # Cancel transition
@@ -341,16 +340,13 @@ class Simulation(object):
                     f"  Consolidate-fanout confirm transition at block {height}"
                 )
                 self.wt.finalize_consolidate_fanout(tx, height)
+                # Some vaults may have had (some of) their coins consolidated
+                # during the cf tx, need to top up those vaults when the new
+                # fanout coins become available again.
                 self.top_up_sequence(height)
+                # If there was a change output, proceed with the next CF tx.
                 if tx.txouts[-1].processing_state == ProcessingState.UNPROCESSED:
-                    cf_fee = self.wt.broadcast_consolidate_fanout(height)
-                    logging.info(
-                        f"  Second Consolidate-fanout transition at block {height} with"
-                        f" fee: {cf_fee}"
-                    )
-                    if self.cf_fee is None:
-                        self.cf_fee = 0
-                    self.cf_fee += cf_fee
+                    self.broadcast_cf_tx(height)
             elif isinstance(tx, CancelTx):
                 logging.debug(f"  Cancel confirm transition at block {height}")
                 confirmed = self.wt.finalize_cancel(tx, height)
@@ -390,10 +386,14 @@ class Simulation(object):
             # First of all, was any transaction confirmed in this block?
             self.confirm_sequence(block)
 
+            # Refill once per refill period
+            if block % self.refill_period == 0:
+                self.refill_sequence(block, 0)
+
             if self.scale_fixed:
                 # We always try to keep the number of expected vaults under watch. We might
                 # not be able to allocate if a CF tx is pending but not yet confirmed.
-                for i in range(len(self.wt.list_vaults()), self.num_vaults):
+                for _ in range(self.wt.vaults_count(), self.num_vaults):
                     try:
                         self.wt.allocate(self.new_vault_id(), VAULT_AMOUNT, block)
                     except AllocationError as e:
@@ -402,17 +402,12 @@ class Simulation(object):
                             f" block {block}: {str(e)}"
                         )
                         break
-
-            # Refill once per refill period
-            if block % self.refill_period == 0:
-                self.refill_sequence(block, 0)
-
-            # The delegate rate is per day
-            if not self.scale_fixed:
+            else:
+                # The delegate rate is per day
                 if random.random() < self.delegate_rate / BLOCKS_PER_DAY:
                     self.delegate_sequence(block)
 
-            # The spend rate is a rate per day
+            # The spend rate is per day
             if random.random() < self.unvault_rate / BLOCKS_PER_DAY:
                 if self.scale_fixed:
                     self.delegate_sequence(block)
@@ -469,7 +464,7 @@ class Simulation(object):
                     self.wt_risk_time.append((risk_on, risk_off))
 
             if self.with_divergence or self.with_risk_status:
-                self._reserve_divergence(block)
+                self.compute_reserve_divergence(block)
 
             if self.with_fb_coins_dist:
                 if block % 10_000 == 0:
@@ -491,9 +486,9 @@ class Simulation(object):
                             )
                             raise (
                                 RuntimeError(
-                                    f"Watchtower failed to confirm cancel"
-                                    f" transaction in time. All your base are belong"
-                                    f" to us."
+                                    "Watchtower failed to confirm cancel"
+                                    " transaction in time. All your base are belong"
+                                    " to us."
                                 )
                             )
                     if isinstance(tx, ConsolidateFanoutTx):
