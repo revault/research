@@ -12,8 +12,8 @@ The WT achieves its goal to enforce policies by broadcasting a cancel transactio
 
 The simulator can be configured by setting the following environment variables. 
 
-| ENV VAR | Meaning | Value type |Default value
-| --- | --- | --- |
+| ENV VAR | Meaning | Value type | Default value |
+| --- | --- | --- | --- |
 | PLOT_FILENAME | Name of graphical plot of results | `str` | `None`|
 | REPORT_FILENAME | Name of text-based results report | `str` |`None`|
 | N_STK | Number of stakeholders | `int in (1,10)` |`7`|
@@ -36,7 +36,7 @@ If `DELEGATE_RATE` is not set, the simulation will run at a fixed scale where th
 
 To control which results to plot, you can set the following environment variables:
 
-| ENV VAR | Plot content | Value type |Default value
+| ENV VAR | Plot content | Value type | Default value |
 | --- | --- | --- | --- |
 |PLOT_BALANCE|total balance, un-allocated balance, required reserve against time|`0` or `1`|`1`|
 |PLOT_DIVERGENCE| minimum, maximum and mean divergence of vault reserves from requirement|`0` or `1`|`0`|
