@@ -1167,27 +1167,3 @@ class StateMachine:
         we are interested in (it does not affect the availability of feebump coins).
         """
         self.remove_vault(self.vaults[vault_id])
-
-
-# FIXME: eventually have some small pytests
-if __name__ == "__main__":
-    sm = StateMachine(
-        n_stk=5,
-        n_man=5,
-        hist_feerate_csv="historical_fees.csv",
-        reserve_strat="CUMMAX95Q90",
-        estimate_strat="ME30",
-        i_version=2,
-    )
-
-    sm.refill(500000)
-    block = 400000
-    sm.consolidate_fanout(block)
-    coins = list(sm.coin_pool.list_coins())
-    block += 6
-    sm.allocate(vault_id=1, amount=200000, block_height=block)
-    sm.process_spend(vault_id=1)
-    block += 6
-    sm.allocate(vault_id=2, amount=200000, block_height=block)
-    sm.process_cancel(vault_id=2, block_height=block)
-    sm.finalize_cancel(vault_id=2)
