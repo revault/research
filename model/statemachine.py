@@ -385,13 +385,12 @@ class StateMachine:
     def next_block_feerate(self, height):
         """Value of `estimatesmartfee 1 CONSERVATIVE`.
 
-        When estimates aren't available, falls back to the maximum of the last
-        3 block median.
+        When estimates aren't available, use the user-provided fallback method.
         """
         try:
             return int(self.hist_df["est_1block"][height])
         except ValueError:
-            return int(self.hist_df["85Q1H"][height])
+            return int(self.hist_df[self.estimate_strat][height])
 
     def cancel_vbytes(self):
         """Size of the Cancel transaction without any feebump input"""
