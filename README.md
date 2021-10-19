@@ -47,7 +47,18 @@ To control which results to plot, you can set the following environment variable
 |PLOT_RISK_STATUS||risk coefficient against time|`0` or `1`|`0`|
 |PLOT_FB_COINS_DIST|coin pool distribution (sampled every 10,000 blocks)|`0` or `1`|`0`|
 
-Note that at least two plot types are required to run the simulation. 
+Note that at least two plot types are required to run the simulation.
+
+## Dependencies
+
+We use [`pandas`](https://pandas.pydata.org/) for data analysis and [`matplotlib`](https://matplotlib.org/) for plotting the results.
+Before running the simulation, you need to install these dependencies.
+```
+cd model/
+python3 -m venv venv
+. venv/bin/activate
+pip install -r requirements.txt
+```
 
 ## Examples
 
@@ -55,7 +66,7 @@ You can run the `main.py` script with the defaults (by not specifying a configur
 of the available examples. For instance the `otc_desk.sh` script simulates the usage of Revault for
 a typical bitcoin retailer:
 ```
-cd model/
+# From the `model` directory
 ./examples/otc_desk.sh
 ```
 
