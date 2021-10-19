@@ -47,8 +47,6 @@ class Simulation(object):
         with_op_cost=False,
         with_cum_op_cost=False,
         with_overpayments=False,
-        with_coin_pool=False,
-        with_coin_pool_age=False,
         with_risk_status=False,
         with_risk_time=False,
         with_fb_coins_dist=False,
@@ -88,16 +86,8 @@ class Simulation(object):
         self.wt_risk_time = []
         self.with_overpayments = with_overpayments
         self.overpayments = []
-        self.with_coin_pool = with_coin_pool
-        self.pool_after_refill = []
-        self.pool_after_cf = []
-        self.pool_after_spend = []
-        self.pool_after_cancel = []
-        self.pool_after_catastrophe = []
         self.with_risk_status = with_risk_status
         self.risk_status = []
-        self.with_coin_pool_age = with_coin_pool_age
-        self.coin_pool_age = []
         self.with_fb_coins_dist = with_fb_coins_dist
         self.fb_coins_dist = []
         self.vm_values = []
@@ -219,11 +209,6 @@ class Simulation(object):
             feerate = self.wt.next_block_feerate(block_height)
             self.refill_fee = REFILL_TX_SIZE * feerate
 
-            # snapshot coin pool after refill confirmation
-            if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_refill.append([block_height, amounts])
-
             # Consolidate-fanout transition
             # Wait for confirmation of refill, then CF Tx
             cf_fee = self.wt.broadcast_consolidate_fanout(block_height)
@@ -234,11 +219,6 @@ class Simulation(object):
             if self.cf_fee is None:
                 self.cf_fee = 0
             self.cf_fee += cf_fee
-
-            # snapshot coin pool after CF Tx confirmation
-            if self.with_coin_pool:
-                amounts = [coin.amount for coin in self.wt.list_coins()]
-                self.pool_after_cf.append([block_height, amounts])
 
         else:
             logging.info(f"  Refill not required, WT has enough bitcoin")
@@ -291,11 +271,6 @@ class Simulation(object):
         )
         self.wt.spend(vault_id, block_height)
 
-        # snapshot coin pool after spend attempt
-        if self.with_coin_pool:
-            amounts = [coin.amount for coin in self.wt.list_coins()]
-            self.pool_after_spend.append([block_height, amounts])
-
     def cancel(self, block_height):
         logging.info(f"Cancel at block {block_height}")
         if len(self.wt.list_available_vaults()) == 0:
@@ -308,11 +283,6 @@ class Simulation(object):
         logging.info(
             f"  Cancel transition with vault {vault_id} for fee: {self.cancel_fee}"
         )
-
-        # snapshot coin pool after cancel
-        if self.with_coin_pool:
-            amounts = [coin.amount for coin in self.wt.list_coins()]
-            self.pool_after_cancel.append([block_height, amounts])
 
         # Compute overpayments
         if self.with_overpayments:
@@ -342,11 +312,6 @@ class Simulation(object):
             logging.info(
                 f"  Cancel transition with vault {vault.id} for fee: {cancel_fee}"
             )
-
-        # snapshot coin pool after all spend attempts are cancelled
-        if self.with_coin_pool:
-            amounts = [coin.amount for coin in self.wt.list_coins()]
-            self.pool_after_catastrophe.append([block_height, amounts])
 
     def confirm_sequence(self, height):
         """State transition which considers each tx in WT's mempool and checks if the offered
@@ -378,7 +343,16 @@ class Simulation(object):
                     self.cf_fee += cf_fee
             elif isinstance(tx, CancelTx):
                 logging.debug(f"  Cancel confirm transition at block {height}")
-                self.wt.finalize_cancel(tx, height)
+                confirmed = self.wt.finalize_cancel(tx, height)
+
+                # Compute overpayments
+                if self.with_overpayments:
+                    if confirmed:
+                        feerate = self.wt.next_block_feerate(height)
+                        needed_fee = self.wt.cancel_tx_fee(feerate, len(tx.fbcoins))
+                        # Note: negative overpayments (underpayments) possible if minfee for block was 0
+                        self.overpayments.append([height, tx.fee - needed_fee])
+
             else:
                 raise
 
@@ -471,13 +445,6 @@ class Simulation(object):
                 )
                 self.refill_fee, self.cf_fee, self.cancel_fee = None, None, None
 
-            if self.with_coin_pool_age:
-                processed = [
-                    coin for coin in self.wt.list_coins() if coin.is_confirmed()
-                ]
-                age = sum([block - coin.fan_block for coin in processed])
-                self.coin_pool_age.append([block, age])
-
             if self.with_cum_op_cost:
                 was_risky = is_risky
                 is_risky = any(
@@ -542,9 +509,7 @@ class Simulation(object):
                 self.with_op_cost,
                 self.with_cum_op_cost,
                 self.with_overpayments,
-                self.with_coin_pool,
                 self.with_risk_status,
-                self.with_coin_pool_age,
                 self.with_fb_coins_dist,
             ]
         )
@@ -671,89 +636,6 @@ class Simulation(object):
 
             plot_num += 1
 
-        # Plot coin pool amounts vs block
-        if (
-            self.with_coin_pool
-            and self.pool_after_refill != []
-            and self.pool_after_cf != []
-            and self.pool_after_spend != []
-            and self.pool_after_cancel != []
-            and self.pool_after_catastrophe != []
-        ):
-            for frame in self.pool_after_refill:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                pool_df = DataFrame(tuples, columns=["block", "amount"])
-                pool_df.plot.scatter(
-                    x="block",
-                    y="amount",
-                    color="r",
-                    alpha=0.1,
-                    s=5,
-                    ax=axes[plot_num],
-                    # label="After Refill",
-                )
-            for frame in self.pool_after_cf:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                pool_df = DataFrame(tuples, columns=["block", "amount"])
-                pool_df.plot.scatter(
-                    x="block",
-                    y="amount",
-                    color="g",
-                    alpha=0.1,
-                    s=5,
-                    ax=axes[plot_num],
-                    # label="After CF",
-                )
-            for frame in self.pool_after_spend:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                pool_df = DataFrame(tuples, columns=["block", "amount"])
-                pool_df.plot.scatter(
-                    x="block",
-                    y="amount",
-                    color="b",
-                    alpha=0.1,
-                    s=5,
-                    ax=axes[plot_num],
-                    # label="After Spend",
-                )
-            for frame in self.pool_after_cancel:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                pool_df = DataFrame(tuples, columns=["block", "amount"])
-                pool_df.plot.scatter(
-                    x="block",
-                    y="amount",
-                    color="k",
-                    alpha=0.1,
-                    s=5,
-                    ax=axes[plot_num],
-                    # label="After Cancel",
-                )
-            for frame in self.pool_after_catastrophe:
-                tuples = list(zip([frame[0] for i in frame[1]], frame[1]))
-                pool_df = DataFrame(tuples, columns=["block", "amount"])
-                pool_df.plot.scatter(
-                    x="block",
-                    y="amount",
-                    color="orange",
-                    alpha=0.1,
-                    s=5,
-                    ax=axes[plot_num],
-                    # label="After Catastrophe",
-                )
-            # handles, labels = axes[plot_num].get_legend_handles_labels()
-            # FIXME
-            # try:
-            #     i = subplots.index("operations")
-            #     handles, _labels = axes[i].get_legend_handles_labels()
-            #     labels = set(labels)
-            #     axes[plot_num].legend(handles, labels, loc="upper right")
-            # except (ValueError):
-            #     pass
-            axes[plot_num].set_title("Feebump Coin Pool")
-            axes[plot_num].set_ylabel("Coin Amount (Satoshis)", labelpad=15)
-            axes[plot_num].set_xlabel("Block", labelpad=15)
-            plot_num += 1
-
         # Plot vault reserves divergence
         if self.with_divergence and self.divergence != []:
             div_df = DataFrame(
@@ -810,19 +692,6 @@ class Simulation(object):
             axes[plot_num].set_xlabel("Block", labelpad=15)
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_title("Cancel Fee Overpayments")
-            plot_num += 1
-
-        # Plot coin pool age
-        if self.with_coin_pool_age and self.coin_pool_age != []:
-            age_df = DataFrame(self.coin_pool_age, columns=["block", "age"])
-            age_df.plot.scatter(
-                x="block",
-                y="age",
-                s=6,
-                color="orange",
-                ax=axes[plot_num],
-                label="Total coin pool age",
-            )
             plot_num += 1
 
         # Plot fb_coins_dist
@@ -972,8 +841,6 @@ if __name__ == "__main__":
         with_op_cost=False,
         with_cum_op_cost=False,
         with_overpayments=False,
-        with_coin_pool=False,
-        with_coin_pool_age=False,
         with_risk_status=True,
         with_risk_time=False,
         with_fb_coins_dist=False,

@@ -8,32 +8,42 @@ from simulation import Simulation
 REPORT_FILENAME = os.getenv("REPORT_FILENAME", None)
 PLOT_FILENAME = os.getenv("PLOT_FILENAME", None)
 PROFILE_FILENAME = os.getenv("PROFILE_FILENAME", None)
-N_STK = os.getenv("N_STK", None)
-N_MAN = os.getenv("N_MAN", None)
-LOCKTIME = os.getenv("LOCKTIME", None)
-HIST_CSV = os.getenv("HIST_CSV", None)
-RESERVE_STRAT = os.getenv("RESERVE_STRAT", None)
-ESTIMATE_STRAT = os.getenv("ESTIMATE_STRAT", None)
-I_VERSION = os.getenv("I_VERSION", None)
-CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", None)
-NUMBER_VAULTS = os.getenv("NUMBER_VAULTS", None)
-REFILL_EXCESS = os.getenv("REFILL_EXCESS", None)
-REFILL_PERIOD = os.getenv("REFILL_PERIOD", None)
+N_STK = os.getenv("N_STK", 7)
+N_MAN = os.getenv("N_MAN", 3)
+LOCKTIME = os.getenv("LOCKTIME", 24)
+HIST_CSV = os.getenv("HIST_CSV", "../block_fees/historical_fees.csv")
+RESERVE_STRAT = os.getenv("RESERVE_STRAT", "CUMMAX95Q90")
+ESTIMATE_STRAT = os.getenv("ESTIMATE_STRAT", "85Q1H")
+I_VERSION = os.getenv("I_VERSION", 3)
+CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", 1)
+NUMBER_VAULTS = os.getenv("NUMBER_VAULTS", 20)
+REFILL_EXCESS = os.getenv("REFILL_EXCESS", 2)
+REFILL_PERIOD = os.getenv("REFILL_PERIOD", 1008)
 # Unvault rate per day
-UNVAULT_RATE = os.getenv("UNVAULT_RATE", None)
-# Invalid rate per spend
-INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", None)
+UNVAULT_RATE = os.getenv("UNVAULT_RATE", 1)
+# Invalid rate per unvault
+INVALID_SPEND_RATE = os.getenv("INVALID_SPEND_RATE", 0.01)
 # Catastrophe rate per day
-CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", None)
-# Delegate rate per day (if scale_is not fixed)
+CATASTROPHE_RATE = os.getenv("CATASTROPHE_RATE", 0.001)
+# Delegate rate per day (if not running at fixed scale)
 DELEGATE_RATE = os.getenv("DELEGATE_RATE", None)
+
+# Plot types
+BALANCE = os.getenv("BALANCE", "true").lower() == "true"
+CUM_OP_COST = os.getenv("CUM_OP_COST", "true").lower() == "true"
+RISK_TIME = (
+    os.getenv("RISK_TIME", "false").lower() == "true" if CUM_OP_COST is True else False
+)
+DIVERGENCE = os.getenv("DIVERGENCE", "false").lower() == "true"
+OP_COST = os.getenv("OP_COST", "false").lower() == "true"
+OVERPAYMENTS = os.getenv("OVERPAYMENTS", "false").lower() == "true"
+RISK_STATUS = os.getenv("RISK_STATUS", "false").lower() == "true"
+FB_COINS_DIST = os.getenv("FB_COINS_DIST", "false").lower() == "true"
 
 if __name__ == "__main__":
     random.seed(21000000)
     # FIXME: make it configurable through command line
     logging.basicConfig(level=logging.DEBUG)
-
-    # note: fee_estimates_fine.csv starts on block 415909 at 2016-05-18 02:00:00
 
     req_vars = [
         N_STK,
@@ -59,7 +69,25 @@ if __name__ == "__main__":
             " REFILL_PERIOD, UNVAULT_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE."
         )
         sys.exit(1)
-    logging.info(f"Config: {', '.join(v for v in req_vars)}")
+
+    plot_types = [
+        BALANCE,
+        CUM_OP_COST,
+        DIVERGENCE,
+        OP_COST,
+        OVERPAYMENTS,
+        RISK_STATUS,
+        FB_COINS_DIST,
+    ]
+    if len([plot for plot in plot_types if plot is True]) < 2:
+        logging.error(
+            "Must generate at least two plot types to run simulation. Plot types are:"
+            " BALANCE, CUM_OP_COST, DIVERGENCE, OP_COST, OVERPAYMENTS, RISK_STATUS,"
+            " or FB_COINS_DIST."
+        )
+        sys.exit(1)
+
+    logging.info(f"Config: {', '.join(str(v) for v in req_vars)}")
     sim = Simulation(
         int(N_STK),
         int(N_MAN),
@@ -76,11 +104,14 @@ if __name__ == "__main__":
         float(INVALID_SPEND_RATE),
         float(CATASTROPHE_RATE),
         float(DELEGATE_RATE) if DELEGATE_RATE is not None else None,
-        with_balance=True,
-        # with_fb_coins_dist=True,
-        with_cum_op_cost=True,
-        with_divergence=True,
-        with_overpayments=True,
+        with_balance=BALANCE,
+        with_divergence=DIVERGENCE,
+        with_op_cost=OP_COST,
+        with_cum_op_cost=CUM_OP_COST,
+        with_risk_time=RISK_TIME,
+        with_overpayments=OVERPAYMENTS,
+        with_risk_status=RISK_STATUS,
+        with_fb_coins_dist=FB_COINS_DIST,
     )
 
     start_block = 350000
@@ -104,5 +135,3 @@ if __name__ == "__main__":
         if REPORT_FILENAME is not None:
             with open(f"{REPORT_FILENAME}.txt", "w+", encoding="utf-8") as f:
                 f.write(report)
-
-        # sim.plot_fee_history(start_block,end_block, PLOT_FILENAME, True)
