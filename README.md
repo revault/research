@@ -24,7 +24,7 @@ The simulator can be configured by setting the following environment variables.
 | N_MAN | Number of managers | `int in (1,10)` |`3`|
 | LOCKTIME | Relative locktime length for unvault | `int > 0` |`24`|
 | RESERVE_STRAT | Strategy for defining feerate reserve per vault | `CUMMAX95Q90` or `CUMMAX95Q1` |`CUMMAX95Q90`|
-| ESTIMATE_STRAT | Fall-back strategy for fee-rate estimation if estimateSmartFee fails | `ME30` or `85Q1H`| `85Q1H`|
+| FALLBACK_EST_STRAT | Fall-back strategy for fee-rate estimation if estimateSmartFee fails | `ME30` or `85Q1H`| `85Q1H`|
 | CF_COIN_SELECTION | Coin selection version for consolidate-fanout transaction |`0`, `1`, `2` or `3`|`3`|
 | CANCEL_COIN_SELECTION | Coin selection version for cancel transaction |`0` or `1`|`1`|
 | HIST_CSV | Path to fee history data | `str` | [`block_fees/historical_fees.csv`](block_fees/historical_fees.csv) |
