@@ -7,6 +7,7 @@ TODO:
 
 import bisect
 import logging
+import math
 
 from enum import Enum
 from pandas import read_csv
@@ -18,6 +19,7 @@ from utils import (
     MAX_TX_SIZE,
     CANCEL_TX_WEIGHT,
     FB_DUST_THRESH,
+    MIN_BUMP_WORST_CASE,
 )
 
 
@@ -47,7 +49,7 @@ class ProcessingState(Enum):
 
 
 class VaultState(Enum):
-    """Whether a vault is being"""
+    """Whether a vault is being spent or canceled"""
 
     READY = 0
     SPENDING = 1
@@ -106,7 +108,7 @@ class FeebumpCoin:
         self.amount = amount
         self.processing_state = processing_state
         # If confirmed, the block at which it was created by the CF tx,
-        # tracked because of grab_coins_1
+        # tracked because of cf_coin_selec_1
         self.fan_block = fan_block
 
     def __repr__(self):
@@ -250,6 +252,7 @@ class StateMachine:
         self.I_version = i_version
         self.cancel_coin_selection = cancel_coin_selec
 
+        # FIXME: make these configurable by env vars?
         self.vb_coins_count = 6
         self.vm_factor = 1.2  # multiplier M
         self.I_2_tol = 0.3
@@ -262,6 +265,7 @@ class StateMachine:
         # Prepare the rolling stats
         thirty_days = 144 * 30
         ninety_days = 144 * 90
+        logging.debug("Preparing the fee estimation data.")
 
         if self.estimate_strat == "MA30":
             self.hist_df["MA30"] = (
@@ -306,12 +310,15 @@ class StateMachine:
         elif self.reserve_strat == "CUMMAX95Q1":
             self.hist_df["CUMMAX95Q1"] = (
                 self.hist_df["mean_feerate"]
+                # FIXME: why do the parameters change here?
                 .rolling(144, min_periods=14)
                 .quantile(quantile=0.95, interpolation="linear")
                 .cummax()
             )
         else:
             raise ValueError("Reserve strategy not implemented")
+
+        logging.debug("Done processing the fee estimation data.")
 
     def list_vaults(self):
         return list(self.vaults.values())
@@ -358,7 +365,7 @@ class StateMachine:
             self.coin_pool.deallocate_coin(coin)
         del self.vaults[vault.id]
 
-    def _feerate_reserve_per_vault(self, block_height):
+    def feerate_reserve_per_vault(self, block_height):
         """Return feerate reserve per vault (satoshi/vbyte). The value is determined from a
         statistical analysis of historical feerates, using one of the implemented strategies
         chosen with the self.reserve_strat parameter.
@@ -372,10 +379,12 @@ class StateMachine:
         self.frpv = (block_height, self.hist_df[self.reserve_strat][block_height])
         return self.frpv[1]
 
-    def _feerate(self, block_height):
-        """Return a current feerate estimate (satoshi/vbyte). The value is determined from a
-        statistical analysis of historical feerates, using one of the implemented strategies
-        chosen with the self.estimate_strat parameter.
+    def fallback_feerate(self, block_height):
+        """Return a block chain based feerate estimate (satoshi/vbyte).
+
+        The value is determined from a statistical analysis of historical feerates,
+        using one of the implemented strategies chosen with the self.estimate_strat
+        parameter.
         """
         if self.feerate[0] == block_height:
             return self.feerate[1]
@@ -391,11 +400,11 @@ class StateMachine:
         try:
             return int(self.hist_df["est_1block"][height])
         except ValueError:
-            return int(self.hist_df[self.estimate_strat][height])
+            return self.fallback_feerate(height)
 
     def cancel_vbytes(self):
         """Size of the Cancel transaction without any feebump input"""
-        return (CANCEL_TX_WEIGHT[self.n_stk][self.n_man] + 3) // 4
+        return math.ceil(CANCEL_TX_WEIGHT[self.n_stk][self.n_man] / 4)
 
     def cancel_tx_fee(self, feerate, n_fb_inputs):
         """Get the Cancel tx fee at this feerate for this number of fb txins."""
@@ -403,7 +412,8 @@ class StateMachine:
         return int(cancel_tx_size * feerate)
 
     def fee_reserve_per_vault(self, block_height):
-        return self.cancel_tx_fee(self._feerate_reserve_per_vault(block_height), 0)
+        """The fee needed to bump the Cancel tx at the reserve feerate."""
+        return self.cancel_tx_fee(self.feerate_reserve_per_vault(block_height), 0)
 
     def is_tx_confirmed(self, tx, height):
         """We consider a transaction to have been confirmed in this block if its
@@ -412,25 +422,45 @@ class StateMachine:
         min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
         return tx.feerate() > min_feerate
 
-    # FIXME: cleanup doc, no more the main fb coin
     def Vm(self, block_height):
-        """Amount for the main feebump coin"""
+        """Starting value for the low-value feebump coins.
+
+        The low value fb coins are not part of the critical reserve but used to reduce
+        overpayments.
+        """
         if self.vm_cache[0] == block_height:
             return self.vm_cache[1]
 
-        feerate = self._feerate(block_height)
+        # We use the block chain based estimate so it can be deterministically
+        # computed by the operator's wallet.
+        feerate = self.fallback_feerate(block_height)
         vm = int(self.cancel_tx_fee(feerate, 0) + feerate * P2WPKH_INPUT_SIZE)
         assert vm > 0
         self.vm_cache = (block_height, vm)
         return vm
 
+    def min_acceptable_fbcoin_value(self, height):
+        """The minimum value for a feebumping coin we create is one that allows
+        to pay for its inclusion at the maximum feerate AND increase the Cancel
+        tx fee by at least 5sat/vbyte.
+        """
+        feerate = self.feerate_reserve_per_vault(height)
+        return int(
+            feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(MIN_BUMP_WORST_CASE, 0)
+        )
+
     def Vb(self, block_height):
-        """Amount for a backup feebump coin"""
+        """Value of the large feebump coins.
+
+        The high-value fb coins are here to ensure we can bump the Cancel to the
+        reserve feerate, therefore they are lower-bounded to at least pay for their
+        own fee at the reserve feerate.
+        In addition we make sure they at least bump the feerate by 5sat/vbyte.
+        """
         reserve = self.fee_reserve_per_vault(block_height)
-        reserve_rate = self._feerate_reserve_per_vault(block_height)
+        reserve_rate = self.feerate_reserve_per_vault(block_height)
         vb = reserve / self.vb_coins_count
-        # FIXME make this a constant
-        min_vb = self.cancel_tx_fee(5, 0)
+        min_vb = self.min_acceptable_fbcoin_value(block_height)
         return int(reserve_rate * P2WPKH_INPUT_SIZE + max(vb, min_vb))
 
     def coins_dist_reserve(self, block_height):
@@ -489,12 +519,15 @@ class StateMachine:
 
     def is_negligible(self, coin, block_height):
         """A coin is considered negligible if its amount is less than the minimum
-        of Vm and the fee required to bump a Cancel transaction by 1 sat per vByte
+        of Vm and the fee required to bump a Cancel transaction by 5 sat per vByte
         in the worst case (when the fee rate is equal to the reserve rate).
         Note: t1 is same as the lower bound of Vb.
         """
-        reserve_rate = self._feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(1, 0)
+        # FIXME: it really is useless with the current dist. Vm is always lower than Vb.
+        reserve_rate = self.feerate_reserve_per_vault(block_height)
+        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(
+            MIN_BUMP_WORST_CASE, 0
+        )
         t2 = self.Vm(block_height)
         minimum = min(t1, t2)
         if coin.amount <= minimum:
@@ -507,8 +540,7 @@ class StateMachine:
         assert isinstance(amount, int)
         self.coin_pool.add_coin(amount)
 
-    # FIXME: rename in CF coin selection
-    def grab_coins_0(self, block_height):
+    def cf_coin_selec_0(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
@@ -530,7 +562,7 @@ class StateMachine:
 
         return self.grab_coins(coin_filter)
 
-    def grab_coins_1(self, block_height):
+    def cf_coin_selec_1(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
@@ -553,7 +585,7 @@ class StateMachine:
 
         return self.grab_coins(coin_filter)
 
-    def grab_coins_2(self, block_height):
+    def cf_coin_selec_2(self, block_height):
         """Select coins to consume as inputs for the CF transaction,
         remove them from P and V.
 
@@ -563,7 +595,7 @@ class StateMachine:
         if the fee-rate is low, all negligible coins
         """
         dist = set(self.fb_coins_dist(block_height))
-        low_feerate = self._feerate(block_height) <= 5
+        low_feerate = self.next_block_feerate(block_height) <= 5
 
         def coin_in_dist(coin_value, dist, tolerance):
             for x in dist:
@@ -594,7 +626,7 @@ class StateMachine:
 
         return self.grab_coins(coin_filter)
 
-    def grab_coins_3(self, height):
+    def cf_coin_selec_3(self, height):
         """Select coins to consume as inputs of the CF transaction.
 
         This version grabs all coins that were just refilled. In addition it grabs
@@ -632,30 +664,22 @@ class StateMachine:
         Pays for its inclusion at the maximum feerate AND increases the Cancel
         tx fee by at least 2sat/vbyte.
         """
-        feerate = self._feerate_reserve_per_vault(height)
+        feerate = self.feerate_reserve_per_vault(height)
         return int(feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(2, 0))
-
-    def min_acceptable_fbcoin_value(self, height):
-        """The minimum value for a feebumping coin we create is one that allows
-        to pay for its inclusion at the maximum feerate AND increase the Cancel
-        tx fee by at least 5sat/vbyte.
-        """
-        feerate = self._feerate_reserve_per_vault(height)
-        return int(feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(5, 0))
 
     # FIXME: eventually we should allocate as many outputs as we can, even if
     # it only represents part of a reserve. It would really lower the number
     # of allocation failures.
-    # FIXME: we shouldn't use the next block feerate.
     def broadcast_consolidate_fanout(self, block_height):
         """
         Simulate the WT creating a consolidate-fanout (CF) tx which aims to 1) create coins from
-        new re-fills that enable accurate feebumping and 2) to consolidate negligible feebump coins
+        new re-fills that enable accurate feebumping and 2) consolidate negligible feebump coins
         if the current feerate is "low".
 
         Note that negligible coins that are consolidated will be removed from their
         associated vault's fee_reserve. So this process will diminish the vault's fee
-        reserve until the new coins are confirmed and re-allocated.
+        reserve until the new coins are confirmed and re-allocated (FIXME: actually we
+        don't currently re-create coins that are consolidated).
 
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
@@ -663,21 +687,22 @@ class StateMachine:
         dist_reserve = self.coins_dist_reserve(block_height)
         dist_bonus = self.coins_dist_bonus(block_height)
 
-        # Select and consume inputs with I(t), returning the coins
+        # Select coins to be consolidated
         if self.I_version == 0:
-            coins = self.grab_coins_0(block_height)
+            coins = self.cf_coin_selec_0(block_height)
         elif self.I_version == 1:
-            coins = self.grab_coins_1(block_height)
+            coins = self.cf_coin_selec_1(block_height)
         elif self.I_version == 2:
-            coins = self.grab_coins_2(block_height)
+            coins = self.cf_coin_selec_2(block_height)
         elif self.I_version == 3:
-            coins = self.grab_coins_3(block_height)
+            coins = self.cf_coin_selec_3(block_height)
         else:
             raise CfError("Unknown algorithm version for coin consolidation")
 
+        # FIXME: we shouldn't use the next block feerate, rather something more economical.
         feerate = self.next_block_feerate(block_height)
 
-        # FIXME this doesn't re-create enough coins? If we consolidated some.
+        # FIXME this doesn't re-create enough coins if we consolidated some.
         added_coins = []
         # Keep track of the CF tx size and fees as we add outputs
         cf_size = cf_tx_size(n_inputs=len(coins), n_outputs=0)
@@ -941,9 +966,8 @@ class StateMachine:
     def broadcast_cancel(self, vault_id, block_height):
         """Construct and broadcast the cancel tx.
 
-        The cancel must be updated with a fee (the large Vm allocated to it).
-        If this fee is unsuccessful at pushing the cancel through, additional small coins may
-        be added from the fee_reserve.
+        We supplement the Cancel tx fees with coins from the pool in order for it
+        to meet the next block feerate.
         """
         vault = self.vaults[vault_id]
 
@@ -1106,7 +1130,7 @@ class StateMachine:
             self.mempool.remove(tx)
             return True
         else:
-            logging.debug(f"    Confirmation failed...")
+            logging.debug("    Confirmation failed...")
             self.maybe_replace_cancel(height, tx)
             return False
 
@@ -1123,7 +1147,7 @@ class StateMachine:
             f" Current feerate: {tx.feerate()}, next block feerate: {new_feerate}"
         )
         if new_feerate > tx.feerate():
-            logging.debug(f"    Replacing Cancel tx...")
+            logging.debug("    Replacing Cancel tx...")
             new_fee = self.cancel_tx_fee(new_feerate, 0)
             # Bitcoin Core policy is set to 1, take some leeway by setting
             # it to 2.
