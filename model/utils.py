@@ -18,6 +18,9 @@ FB_DUST_THRESH = 20_000
 # segwit) transaction
 REFILL_TX_SIZE = 2 * (P2WPKH_INPUT_SIZE + P2WPKH_OUTPUT_SIZE) + TX_OVERHEAD_SIZE
 
+# Minimum feerate increase, in sat/vb, of the feebump coins at the reserve feerate
+MIN_BUMP_WORST_CASE = 5
+
 # A mapping from the number of stakeholders and managers to the Cancel transaction
 # weight. Generated in advance for performance reasons.
 CANCEL_TX_WEIGHT = {
