@@ -133,15 +133,18 @@ class Simulation(object):
         self.vault_id += 1
         return self.vault_id
 
-    def required_reserve(self, block_height):
-        """The absolute amount of sats the WT should have in reserve.
+    def required_reserve_per_vault(self, block_height):
+        """The absolute amount of sats the WT should have in reserve per vault.
 
         Note how the required reserve differs from the reserve feerate times the
         cancel transaction size and the number of vaults: the absolute amount of
         BTC also accounts for the cost of including a coin in the tx vin.
         """
-        required_reserve = sum(self.wt.coins_dist_reserve(block_height))
-        return self.wt.vaults_count() * required_reserve
+        return sum(self.wt.coins_dist_reserve(block_height))
+
+    def required_reserve(self, block_height):
+        """The total absolute amount of sats the WT should have in reserve."""
+        return self.wt.vaults_count() * self.required_reserve_per_vault(block_height)
 
     def refill_amount(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
@@ -192,7 +195,7 @@ class Simulation(object):
 
         divergence = []
         for vault in vaults:
-            div = vault.reserve_balance() - self.required_reserve(block_height)
+            div = vault.reserve_balance() - self.required_reserve_per_vault(block_height)
             divergence.append(div)
         if self.with_divergence:
             self.divergence.append(
