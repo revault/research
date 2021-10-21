@@ -108,8 +108,6 @@ class Simulation(object):
             fallback_est_strat: {fallback_est_strat}\n\
             cf_coin_selec: {cf_coin_selec}\n\
             cancel_coin_selec: {cancel_coin_selec}\n\
-            vb_coins_count: {self.wt.vb_coins_count}\n\
-            vm_factor: {self.wt.vm_factor}\n\
         Simulation config:\n\
             Number of vaults: {self.num_vaults}\n\
             Refill excess: {self.refill_excess}\n\
@@ -485,8 +483,6 @@ class Simulation(object):
             if self.with_fb_coins_dist:
                 if block % 10_000 == 0:
                     self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
-                self.vm_values.append([block, self.wt.Vm(block)])
-                self.vb_values.append([block, self.wt.Vb(block)])
 
             if self.wt.mempool != []:
                 for tx in self.wt.mempool:

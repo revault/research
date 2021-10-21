@@ -5,7 +5,6 @@ TODO:
 * Make good documentation 
 """
 
-import bisect
 import logging
 import math
 
@@ -146,6 +145,22 @@ class FeebumpCoin:
         self.fan_block = height
 
 
+def coins_dist_rec(value, min, feerate):
+    """Create a list of coin values recursively.
+
+    Starting from {value}, the amounts are splitted into linearly smaller
+    ones, lower bounded by {min}.
+    Each coin, in addition to its value, is added the needed amount to pay for
+    its own inclusion fee as a transaction input at the provided {feerate}.
+    All coins are assumed to be P2WPKH.
+    """
+    if value <= min:
+        return [min]
+    return [math.ceil(value / 2 + P2WPKH_INPUT_SIZE * feerate)] + coins_dist_rec(
+        math.ceil(value / 2), min, feerate
+    )
+
+
 class CoinPool:
     """A set of feebump coins that the WT operates."""
 
@@ -252,9 +267,8 @@ class StateMachine:
         self.cf_coin_selec = cf_coin_selec
         self.cancel_coin_selection = cancel_coin_selec
 
-        # FIXME: make these configurable by env vars?
         self.vb_coins_count = 6
-        self.vm_factor = 1.2  # multiplier M
+        # FIXME: make it configurable by env vars?
         self.I_2_tol = 0.3
 
         # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
@@ -424,23 +438,6 @@ class StateMachine:
         min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
         return tx.feerate() > min_feerate
 
-    def Vm(self, block_height):
-        """Starting value for the low-value feebump coins.
-
-        The low value fb coins are not part of the critical reserve but used to reduce
-        overpayments.
-        """
-        if self.vm_cache[0] == block_height:
-            return self.vm_cache[1]
-
-        # We use the block chain based estimate so it can be deterministically
-        # computed by the operator's wallet.
-        feerate = self.fallback_feerate(block_height)
-        vm = int(self.cancel_tx_fee(feerate, 0) + feerate * P2WPKH_INPUT_SIZE)
-        assert vm > 0
-        self.vm_cache = (block_height, vm)
-        return vm
-
     def min_acceptable_fbcoin_value(self, height):
         """The minimum value for a feebumping coin we create is one that allows
         to pay for its inclusion at the maximum feerate AND increase the Cancel
@@ -451,52 +448,48 @@ class StateMachine:
             feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(MIN_BUMP_WORST_CASE, 0)
         )
 
-    def Vb(self, block_height):
-        """Value of the large feebump coins.
-
-        The high-value fb coins are here to ensure we can bump the Cancel to the
-        reserve feerate, therefore they are lower-bounded to at least pay for their
-        own fee at the reserve feerate.
-        In addition we make sure they at least bump the feerate by 5sat/vbyte.
-        """
-        reserve = self.fee_reserve_per_vault(block_height)
-        reserve_rate = self.feerate_reserve_per_vault(block_height)
-        vb = reserve / self.vb_coins_count
-        min_vb = self.min_acceptable_fbcoin_value(block_height)
-        return int(reserve_rate * P2WPKH_INPUT_SIZE + max(vb, min_vb))
-
     def coins_dist_reserve(self, block_height):
-        """The coin amount distribution used to cover up to the worst case.
+        """The reserve part of the coin amount distribution.
 
-        These coins are needed to be able to Cancel up the reserve feerate, but
-        not usually optimal during normal operations.
+        See `fb_coins_dist` docstring for more details.
         """
-        vb = self.Vb(block_height)
-        return [vb] * self.vb_coins_count
+        reserve_feerate = self.feerate_reserve_per_vault(block_height)
+        reserve_fee = self.fee_reserve_per_vault(block_height)
+        min_large_coin = self.min_acceptable_fbcoin_value(block_height)
+        return coins_dist_rec(reserve_fee, min_large_coin, reserve_feerate)
 
-    def coins_dist_bonus(self, block_height):
-        """The coin amount distribution used to reduce overpayments.
+    def coins_dist_bonus(self, block_height, total_value):
+        """The 'bonus' part of the coins amount distribution.
 
-        These coins can't be used for feebumping in worst case scenario (at
-        reserve feerate) but still useful to reduce overpayments.
+        See `fb_coins_dist` docstring for more details.
         """
-        vm = self.Vm(block_height)
-        vb = self.Vb(block_height)
-        dist = [vm]
-        while vm * self.vm_factor < vb:
-            vm *= self.vm_factor
-            dist.append(int(vm))
-        return dist
+        curr_feerate = self.fallback_feerate(block_height)
+        min_small_coin = self.cancel_tx_fee(curr_feerate, 1)
+        return coins_dist_rec(total_value, min_small_coin, curr_feerate)
+
+    def coins_dist(self, block_height):
+        """Helper to get the non-concatenated amount distribution.
+
+        See `fb_coins_dist` for details.
+        """
+        large_coins = self.coins_dist_reserve(block_height)
+        small_coins = self.coins_dist_bonus(block_height, large_coins[-1])
+        return large_coins, small_coins
 
     def fb_coins_dist(self, block_height):
         """The coin amount distribution to target for a vault reserve.
 
-        This is the concatenation of the reserve distribution and the bonus
-        distribution.
+        The coins are separated in two classes:
+            - Large coins, those must be able to bump the Cancel transaction fee
+            at the reserve feerate.
+            - Small coins, those are "bonus" smaller coins used to reduce overpayments
+            during low-fee periods.
+
+        Note all the input data for the coin distribution function is based on the
+        block chain, allowing operators' wallets to deterministically compute it.
         """
-        return self.coins_dist_reserve(block_height) + self.coins_dist_bonus(
-            block_height
-        )
+        large_coins, small_coins = self.coins_dist(block_height)
+        return large_coins + small_coins
 
     def unallocated_balance(self):
         return sum(
@@ -636,8 +629,6 @@ class StateMachine:
             - Allocated ones that it's not safe to keep (those that would not bump the
               Cancel tx feerate at the reserve (max) feerate).
         """
-        dust = min(FB_DUST_THRESH, self.Vm(height))
-        vm_min = self.Vm(height) * 0.9
 
         def coin_filter(coin):
             if coin.is_unconfirmed():
@@ -651,9 +642,7 @@ class StateMachine:
             ):
                 return False
 
-            if coin.amount < dust:
-                return True
-            if not self.coin_pool.is_allocated(coin) and coin.amount < vm_min:
+            if not self.coin_pool.is_allocated(coin) and coin.amount < FB_DUST_THRESH:
                 return True
 
             return False
@@ -686,8 +675,7 @@ class StateMachine:
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
         # Set target values for our coin creation amounts
-        dist_reserve = self.coins_dist_reserve(block_height)
-        dist_bonus = self.coins_dist_bonus(block_height)
+        dist_reserve, dist_bonus = self.coins_dist(block_height)
 
         # Select coins to be consolidated
         if self.cf_coin_selec == 0:
@@ -861,8 +849,7 @@ class StateMachine:
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
-        dist_req = self.coins_dist_reserve(block_height)
-        dist_bonus = self.coins_dist_bonus(block_height)
+        dist_req, dist_bonus = self.coins_dist(block_height)
         min_coin_value = self.min_fbcoin_value(block_height)
         # If the vault exists and is under reserve, don't remove it immediately
         # to make sure we won't fail after modifying the internal state.
