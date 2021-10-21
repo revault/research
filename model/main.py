@@ -19,7 +19,7 @@ N_MAN = os.getenv("N_MAN", 3)
 LOCKTIME = os.getenv("LOCKTIME", 24)
 HIST_CSV = os.getenv("HIST_CSV", "../block_fees/historical_fees.csv")
 RESERVE_STRAT = os.getenv("RESERVE_STRAT", "CUMMAX95Q90")
-ESTIMATE_STRAT = os.getenv("ESTIMATE_STRAT", "85Q1H")
+FALLBACK_EST_STRAT = os.getenv("FALLBACK_EST_STRAT", "85Q1H")
 CF_COIN_SELECTION = os.getenv("CF_COIN_SELECTION", 3)
 CANCEL_COIN_SELECTION = os.getenv("CANCEL_COIN_SELECTION", 1)
 NUMBER_VAULTS = os.getenv("NUMBER_VAULTS", 10)
@@ -55,7 +55,7 @@ if __name__ == "__main__":
         LOCKTIME,
         HIST_CSV,
         RESERVE_STRAT,
-        ESTIMATE_STRAT,
+        FALLBACK_EST_STRAT,
         CF_COIN_SELECTION,
         CANCEL_COIN_SELECTION,
         NUMBER_VAULTS,
@@ -68,7 +68,7 @@ if __name__ == "__main__":
     if any(v is None for v in req_vars):
         logging.error(
             "Need all these environment variables to be set: N_STK, N_MAN, LOCKTIME,"
-            " HIST_CSV, RESERVE_STRAT, ESTIMATE_STRAT, CF_COIN_SELECTION,"
+            " HIST_CSV, RESERVE_STRAT, FALLBACK_EST_STRAT, CF_COIN_SELECTION,"
             " CANCEL_COIN_SELECTION, NUMBER_VAULTS, REFILL_EXCESS,"
             " REFILL_PERIOD, UNVAULT_RATE, INVALID_SPEND_RATE, CATASTROPHE_RATE."
         )
@@ -98,7 +98,7 @@ if __name__ == "__main__":
         int(LOCKTIME),
         HIST_CSV,
         RESERVE_STRAT,
-        ESTIMATE_STRAT,
+        FALLBACK_EST_STRAT,
         int(CF_COIN_SELECTION),
         int(CANCEL_COIN_SELECTION),
         int(NUMBER_VAULTS),
