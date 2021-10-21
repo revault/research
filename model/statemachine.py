@@ -656,6 +656,9 @@ class StateMachine:
 
         return self.grab_coins(coin_filter)
 
+    def cf_coin_selec_4(self, height):
+        return self.grab_coins(lambda c: c.is_unprocessed())
+
     def min_fbcoin_value(self, height):
         """The absolute minimum value for a feebumping coin.
 
@@ -685,16 +688,11 @@ class StateMachine:
         dist_reserve, dist_bonus = self.coins_dist(block_height)
 
         # Select coins to be consolidated
-        if self.cf_coin_selec == 0:
-            coins = self.cf_coin_selec_0(block_height)
-        elif self.cf_coin_selec == 1:
-            coins = self.cf_coin_selec_1(block_height)
-        elif self.cf_coin_selec == 2:
-            coins = self.cf_coin_selec_2(block_height)
-        elif self.cf_coin_selec == 3:
-            coins = self.cf_coin_selec_3(block_height)
-        else:
+        try:
+            f = getattr(self, f"cf_coin_selec_{self.cf_coin_selec}")
+        except AttributeError:
             raise CfError("Unknown algorithm version for coin consolidation")
+        coins = f(block_height)
 
         # FIXME: we shouldn't use the next block feerate, rather something more economical.
         feerate = self.next_block_feerate(block_height)
