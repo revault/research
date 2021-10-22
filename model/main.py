@@ -97,7 +97,28 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    logging.info(f"Config: {', '.join(str(v) for v in req_vars)}")
+    configuration = {
+        "REPORT_FILENAME": REPORT_FILENAME,
+        "PLOT_FILENAME": PLOT_FILENAME,
+        "PROFILE_FILENAME": PROFILE_FILENAME,
+        "N_STK": N_STK,
+        "N_MAN": N_MAN,
+        "LOCKTIME": LOCKTIME,
+        "HIST_CSV": HIST_CSV,
+        "RESERVE_STRAT": RESERVE_STRAT,
+        "FALLBACK_EST_STRAT": FALLBACK_EST_STRAT,
+        "CF_COIN_SELECTION": CF_COIN_SELECTION,
+        "CANCEL_COIN_SELECTION": CANCEL_COIN_SELECTION,
+        "NUMBER_VAULTS": NUMBER_VAULTS,
+        "REFILL_EXCESS": REFILL_EXCESS,
+        "REFILL_PERIOD": REFILL_PERIOD,
+        "UNVAULT_RATE": UNVAULT_RATE,
+        "INVALID_SPEND_RATE": INVALID_SPEND_RATE,
+        "CATASTROPHE_RATE": CATASTROPHE_RATE,
+        "DELEGATE_RATE": DELEGATE_RATE,
+    }
+    logging.info(f"Configuration:\n{configuration}")
+
     sim = Simulation(
         int(N_STK),
         int(N_MAN),
