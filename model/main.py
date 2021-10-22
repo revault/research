@@ -45,9 +45,11 @@ PLOT_RISK_STATUS = bool(int(os.getenv("PLOT_RISK_STATUS", 0)))
 PLOT_FB_COINS_DIST = bool(int(os.getenv("PLOT_FB_COINS_DIST", 0)))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper()
+PRNG_SEED = os.getenv("PRNG_SEED", 21000000)
 
-if __name__ == "__main__":
-    random.seed(21000000)
+
+def main():
+    random.seed(PRNG_SEED)
 
     if LOG_LEVEL in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
         logging.basicConfig(level=LOG_LEVEL)
@@ -116,6 +118,7 @@ if __name__ == "__main__":
         "INVALID_SPEND_RATE": INVALID_SPEND_RATE,
         "CATASTROPHE_RATE": CATASTROPHE_RATE,
         "DELEGATE_RATE": DELEGATE_RATE,
+        "PRNG_SEED": PRNG_SEED,
     }
     logging.info(f"Configuration:\n{configuration}")
 
@@ -166,3 +169,7 @@ if __name__ == "__main__":
         if REPORT_FILENAME is not None:
             with open(f"{REPORT_FILENAME}.txt", "w+", encoding="utf-8") as f:
                 f.write(report)
+
+
+if __name__ == "__main__":
+    main()
