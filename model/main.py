@@ -44,10 +44,16 @@ PLOT_OVERPAYMENTS = bool(int(os.getenv("PLOT_OVERPAYMENTS", 0)))
 PLOT_RISK_STATUS = bool(int(os.getenv("PLOT_RISK_STATUS", 0)))
 PLOT_FB_COINS_DIST = bool(int(os.getenv("PLOT_FB_COINS_DIST", 0)))
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper()
+
 if __name__ == "__main__":
     random.seed(21000000)
-    # FIXME: make it configurable through command line
-    logging.basicConfig(level=logging.DEBUG)
+
+    if LOG_LEVEL in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+        logging.basicConfig(level=LOG_LEVEL)
+    else:
+        logging.basicConfig(level=logging.DEBUG)
+        logging.error("Invalid log level provided, setting as DEBUG instead.")
 
     req_vars = [
         N_STK,
@@ -86,8 +92,8 @@ if __name__ == "__main__":
     if len([plot for plot in plot_types if plot is True]) < 2:
         logging.error(
             "Must generate at least two plot types to run simulation. Plot types are:"
-            " PLOT_BALANCE, PLOT_CUM_PLOT_OP_COST, PLOT_DIVERGENCE, PLOT_OP_COST, PLOT_OVERPAYMENTS, PLOT_RISK_STATUS,"
-            " or PLOT_FB_COINS_DIST."
+            " PLOT_BALANCE, PLOT_CUM_PLOT_OP_COST, PLOT_DIVERGENCE, PLOT_OP_COST,"
+            " PLOT_OVERPAYMENTS, PLOT_RISK_STATUS, or PLOT_FB_COINS_DIST."
         )
         sys.exit(1)
 
