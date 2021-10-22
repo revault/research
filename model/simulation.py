@@ -33,8 +33,8 @@ class Simulation(object):
         locktime,
         hist_feerate_csv,
         reserve_strat,
-        estimate_strat,
-        i_version,
+        fallback_est_strat,
+        cf_coin_selec,
         cancel_coin_selec,
         num_vaults,
         refill_excess,
@@ -70,8 +70,8 @@ class Simulation(object):
             locktime,
             hist_feerate_csv,
             reserve_strat,
-            estimate_strat,
-            i_version,
+            fallback_est_strat,
+            cf_coin_selec,
             cancel_coin_selec,
         )
         self.vault_id = 0
@@ -816,7 +816,7 @@ class Simulation(object):
         estimates = []
         for block in range(start_block, end_block):
             est1 = self.wt.next_block_feerate(block)
-            self.wt.estimate_strat = comp_strat
+            self.wt.fallback_est_strat = comp_strat
             est2 = self.wt._feerate(block)
             estimates.append([block, est1, est2])
 
