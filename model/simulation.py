@@ -149,7 +149,7 @@ class Simulation(object):
         cancel transaction size and the number of vaults: the absolute amount of
         BTC also accounts for the cost of including a coin in the tx vin.
         """
-        return sum(self.wt.coins_dist_reserve(block_height))
+        return sum(self.wt.fb_coins_dist(block_height))
 
     def required_reserve(self, block_height):
         """The total absolute amount of sats the WT should have in reserve."""
