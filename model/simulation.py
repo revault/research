@@ -1,8 +1,9 @@
 import logging
+import math
+import numpy as np
 import random
 
 from matplotlib import pyplot as plt
-import numpy as np
 from pandas import DataFrame
 from statemachine import StateMachine, AllocationError, ProcessingState
 from transactions import ConsolidateFanoutTx, CancelTx
@@ -138,36 +139,45 @@ class Simulation(object):
         num_vaults = len(self.wt.list_vaults())
         return num_vaults * required_reserve
 
-    def amount_needed(self, block_height, expected_new_vaults):
+    def refill_amount(self, block_height, expected_new_vaults):
         """Returns amount to refill to ensure WT has sufficient operating balance.
         Used by stakeholder wallet software. R(t, E) in the paper.
 
         Note: stakeholder knows WT's balance, num_vaults, fb_coins_dist.
               Stakeholder doesn't know which coins are allocated or not.
         """
-        bal = self.wt.balance()
+        # First of all get the overall needed reserve
+        balance = self.wt.balance()
         target_dist = self.wt.fb_coins_dist(block_height)
         amount_needed_per_vault = sum(target_dist)
-        reserve_total = amount_needed_per_vault * (
-            expected_new_vaults + len(self.wt.list_vaults()) + self.refill_excess
+        reserve_needed = amount_needed_per_vault * (
+            expected_new_vaults + self.wt.vaults_count() + self.refill_excess
         )
-        R = reserve_total - bal
-        if R <= 0:
+
+        # Refill if the balance is very low. Always refill an amount sufficient to create
+        # at least one dist.
+        if balance > reserve_needed * 1.01:
             return 0
+        refill_amount = max(reserve_needed - balance, amount_needed_per_vault)
 
-        new_reserves = R // amount_needed_per_vault
+        # In addition to the absolute amount the WT wallet will need to pay the fee
+        # for the CF transaction(s). Since it'll do it immediately we can estimate
+        # the worst case feerate and add some slack to it.
+        # FIXME: we assume there is only a single one..
+        cf_feerate = self.wt.next_block_feerate(block_height)
+        # We can't know how many inputs there will be to the CF tx since we don't know
+        # how many coins will be consolidated. We arbitrarily assume 2% of thecoins will (FIXME)
+        consolidated_coins_count = int(self.wt.coin_pool.n_coins() // 50) + 1
+        cf_num_inputs = 1 + consolidated_coins_count
+        # Same for the number of outputs. We assume the WT will create as many distributions
+        # as it can from the new refill (rounded up), plus the number of coins it consolidated
+        # (hence overestimating)
+        new_dists = math.ceil(refill_amount / amount_needed_per_vault)
+        cf_num_outputs = new_dists * len(target_dist)
+        cf_fee = cf_tx_size(cf_num_inputs, cf_num_outputs) * cf_feerate
 
-        # Expected CF Tx fee
-        feerate = self.wt.next_block_feerate(block_height)
-        expected_num_outputs = len(self.wt.fb_coins_dist(block_height)) * new_reserves
-        # FIXME: it's likely too much, how to find a good (conservative) estimate for it?
-        expected_num_inputs = self.wt.coin_pool.n_coins() / 2 + 1
-        expected_cf_fee = (
-            cf_tx_size(expected_num_inputs, expected_num_outputs) * feerate
-        )
-
-        R += expected_cf_fee
-        return int(R)
+        refill_amount += cf_fee
+        return int(refill_amount)
 
     def _reserve_divergence(self, block_height):
         """Compute how far the vault's reserves have divereged from the current fee reserve per vault.
@@ -196,7 +206,7 @@ class Simulation(object):
                 self.risk_status.append((block_height, risk_coefficient))
 
     def refill_sequence(self, block_height, expected_new_vaults):
-        refill_amount = self.amount_needed(block_height, expected_new_vaults)
+        refill_amount = self.refill_amount(block_height, expected_new_vaults)
 
         if refill_amount > 0:
             logging.info(f"Refill sequence at block {block_height}")
