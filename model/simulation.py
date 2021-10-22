@@ -491,8 +491,8 @@ class Simulation(object):
             if self.wt.mempool != []:
                 for tx in self.wt.mempool:
                     if isinstance(tx, CancelTx):
-                        self.report_df["max_cancel_conf_time"][0] = max(
-                            self.report_df["max_cancel_conf_time"][0],
+                        self.report_df["max_cancel_conf_time"].loc[0] = max(
+                            self.report_df["max_cancel_conf_time"].loc[0],
                             block - tx.broadcast_height,
                         )
                         if block - tx.broadcast_height >= self.wt.locktime:
@@ -508,8 +508,8 @@ class Simulation(object):
                                 )
                             )
                     if isinstance(tx, ConsolidateFanoutTx):
-                        self.report_df["max_cf_conf_time"][0] = max(
-                            self.report_df["max_cf_conf_time"][0],
+                        self.report_df["max_cf_conf_time"].loc[0] = max(
+                            self.report_df["max_cf_conf_time"].loc[0],
                             block - tx.broadcast_height,
                         )
 
@@ -605,25 +605,33 @@ class Simulation(object):
             axes[plot_num].set_title("Cumulative Operating Costs")
             axes[plot_num].set_ylabel("Satoshis", labelpad=15)
             axes[plot_num].set_xlabel("Block", labelpad=15)
-            self.report_df["cum_cancel_fee"][0] = cumulative_costs_df[
+            self.report_df["cum_cancel_fee"].loc[0] = cumulative_costs_df[
                 "Cancel Fee"
             ].iloc[-1]
-            self.report_df["cum_cf_fee"][0] = cumulative_costs_df["CF Fee"].iloc[-1]
-            self.report_df["cum_refill_fee"][0] = cumulative_costs_df[
+            self.report_df["cum_cf_fee"].loc[0] = cumulative_costs_df["CF Fee"].iloc[-1]
+            self.report_df["cum_refill_fee"].loc[0] = cumulative_costs_df[
                 "Refill Fee"
             ].iloc[-1]
-            self.report_df["cum_ops_cost"][0] = (
-                self.report_df["cum_refill_fee"][0]
-                + self.report_df["cum_cf_fee"][0]
-                + self.report_df["cum_cancel_fee"][0]
+            self.report_df["cum_ops_cost"].loc[0] = (
+                self.report_df["cum_refill_fee"].loc[0]
+                + self.report_df["cum_cf_fee"].loc[0]
+                + self.report_df["cum_cancel_fee"].loc[0]
             )
-            report += f"Total cumulative cancel fee cost: {self.report_df['cum_cancel_fee'][0]}\n"
+            report += (
+                "Total cumulative cancel fee cost:"
+                f" {self.report_df['cum_cancel_fee'].loc[0]}\n"
+            )
             report += (
                 "Total cumulative consolidate-fanout fee cost:"
-                f" {self.report_df['cum_cf_fee'][0]}\n"
+                f" {self.report_df['cum_cf_fee'].loc[0]}\n"
             )
-            report += f"Total cumulative refill fee cost: {self.report_df['cum_refill_fee'][0]}\n"
-            report += f"Total cumulative cost: {self.report_df['cum_ops_cost'][0]}\n"
+            report += (
+                "Total cumulative refill fee cost:"
+                f" {self.report_df['cum_refill_fee'].loc[0]}\n"
+            )
+            report += (
+                f"Total cumulative cost: {self.report_df['cum_ops_cost'].loc[0]}\n"
+            )
 
             # Highlight the plot with areas that show when the WT is at risk due to at least one
             # insufficient vault fee-reserve
@@ -635,25 +643,30 @@ class Simulation(object):
             for (risk_on, risk_off) in self.wt_risk_time:
                 risk_time += risk_off - risk_on
             report += f"Total time at risk: {risk_time} blocks\n"
-            self.report_df["time_at_risk"][0] = risk_time
+            self.report_df["time_at_risk"].loc[0] = risk_time
 
             # What about avg recovery time?
             recovery_times = []
             for (risk_on, risk_off) in self.wt_risk_time:
                 recovery_times.append(risk_off - risk_on)
             if recovery_times != []:
-                self.report_df["mean_recovery_time"][0] = np.mean(recovery_times)
+                self.report_df["mean_recovery_time"].loc[0] = np.mean(recovery_times)
                 report += (
-                    f"Mean recovery time: {self.report_df['mean_recovery_time'][0]}"
+                    f"Mean recovery time: {self.report_df['mean_recovery_time'].loc[0]}"
                     " blocks\n"
                 )
-                self.report_df["median_recovery_time"][0] = np.median(recovery_times)
+                self.report_df["median_recovery_time"].loc[0] = np.median(
+                    recovery_times
+                )
                 report += (
-                    f"Median recovery time: {self.report_df['median_recovery_time'][0]}"
+                    "Median recovery time:"
+                    f" {self.report_df['median_recovery_time'].loc[0]} blocks\n"
+                )
+                self.report_df["max_recovery_time"].loc[0] = max(recovery_times)
+                report += (
+                    f"Max recovery time: {self.report_df['max_recovery_time'].loc[0]}"
                     " blocks\n"
                 )
-                self.report_df["max_recovery_time"][0] = max(recovery_times)
-                report += f"Max recovery time: {self.report_df['max_recovery_time'][0]} blocks\n"
 
             plot_num += 1
 
@@ -747,11 +760,11 @@ class Simulation(object):
         # Report confirmation tracking
         report += (
             "Max confirmation time for a Cancel Tx:"
-            f" {self.report_df['max_cancel_conf_time'][0]}\n"
+            f" {self.report_df['max_cancel_conf_time'].loc[0]}\n"
         )
         report += (
             "Max confirmation time for a Consolidate-fanout Tx:"
-            f" {self.report_df['max_cf_conf_time'][0]}\n"
+            f" {self.report_df['max_cf_conf_time'].loc[0]}\n"
         )
 
         if output is not None:
@@ -761,12 +774,14 @@ class Simulation(object):
             plt.show()
 
         if self.delegation_failures > 0 or self.delegation_successes > 0:
-            self.report_df["delegation_failure_count"][0] = self.delegation_failures
-            self.report_df["delegation_failure_rate"][0] = self.delegation_failures / (
+            self.report_df["delegation_failure_count"].loc[0] = self.delegation_failures
+            self.report_df["delegation_failure_rate"].loc[
+                0
+            ] = self.delegation_failures / (
                 self.delegation_successes + self.delegation_failures
             )
 
-            self.report_df["delegation_failure_rate"][0] = None
+            self.report_df["delegation_failure_rate"].loc[0] = None
             report += (
                 f"Delegation failures: {self.delegation_failures} /"
                 f" { (self.delegation_successes + self.delegation_failures)}"
