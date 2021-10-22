@@ -5,6 +5,7 @@ TODO:
 * Make good documentation 
 """
 
+import itertools
 import logging
 import math
 
@@ -37,6 +38,13 @@ class AllocationError(RuntimeError):
             f"Required reserve: {required_reserve}, unallocated "
             f"balance: {unallocated_balance}"
         )
+
+
+class CoinSelectionError(RuntimeError):
+    """An error occured during coin selection"""
+
+    def __init__(self, message):
+        self.message = message
 
 
 class ProcessingState(Enum):
@@ -267,7 +275,6 @@ class StateMachine:
         self.cf_coin_selec = cf_coin_selec
         self.cancel_coin_selection = cancel_coin_selec
 
-        self.vb_coins_count = 6
         # FIXME: make it configurable by env vars?
         self.I_2_tol = 0.3
 
@@ -1043,26 +1050,11 @@ class StateMachine:
         """
         txin_cost = P2WPKH_INPUT_SIZE * feerate
         allocated_coins = sorted(vault.allocated_coins())
-        # All vb coins are always larger than vm coins (or at least we assume so)
-        vm_coins, vb_coins = (
-            allocated_coins[: -self.vb_coins_count],
-            allocated_coins[-self.vb_coins_count :],
+        selected_coins = []
+        logging.debug(
+            f"        Coin selection needed fee: {needed_fee}, "
+            f"allocated coins: {[c.amount for c in allocated_coins]}"
         )
-        # We often end up with more Vb coins which we would consider to be Vm coins
-        # above. Try to fix this based on their value.
-        while True:
-            # Sanity hard stop
-            if len(vm_coins) <= 6:
-                break
-            coin = vm_coins.pop(-1)
-            if coin.amount >= vb_coins[-1].amount * 0.80:
-                bisect.insort(vb_coins, coin)
-            else:
-                vm_coins.append(coin)
-                break
-
-        def coin_sum(coins):
-            return sum(c.amount for c in coins)
 
         def select_coins(coins):
             for coin in coins:
@@ -1070,45 +1062,60 @@ class StateMachine:
                 self.remove_coin(coin)
             return coins
 
-        # First check if the needed amount is very low, in which case we don't
-        # even need a Vb coin.
-        if vb_coins[0].amount > needed_fee + txin_cost:
-            # TODO: the number of vm coins is always low, we could do an exhaustive search.
-            for i in range(1, len(vm_coins)):
-                if coin_sum(vm_coins[:i]) >= needed_fee + txin_cost * i:
-                    return select_coins(vm_coins[:i])
-            return select_coins([vb_coins[0]])
+        # Shortcut: if the smallest coin value is more than the needed fee, just return it.
+        smallest_coin_effective_value = allocated_coins[0].amount - txin_cost
+        if needed_fee <= smallest_coin_effective_value:
+            return select_coins([allocated_coins[0]])
 
-        # Then gather enough vb coins
-        picked_vb_coins = []
-        paid = 0
-        for i in range(1, len(vb_coins)):
-            coin = vb_coins[-i]
-            if needed_fee - paid < coin.amount - txin_cost:
+        # While the needed fee is largest than our largest coin, it is always our
+        # most optimal pick (as the sum of the rest of the coin value equals its value).
+        while True:
+            largest_coin_effective_value = allocated_coins[-1].amount - txin_cost
+            if needed_fee < largest_coin_effective_value:
                 break
-            picked_vb_coins.append(coin)
-            paid += coin.amount - txin_cost
+            if len(allocated_coins) == 0 or largest_coin_effective_value <= 0:
+                logging.error(
+                    "     Not enough coin allocated to select for Cancel."
+                    f" {needed_fee}sats still needed after selecting "
+                    f"{selected_coins}."
+                )
+                return select_coins(selected_coins)
+            selected_coins.append(allocated_coins.pop(-1))
+            needed_fee -= largest_coin_effective_value
 
-        # And finally fill the gap with small Vm coins. Note we go through the
-        # list in reverse order as the Vm coins amount is increasing.
-        # TODO: figure out why we have less overpayments by going in increasing order
-        # TODO: the number of vm coins is always low, we could do an exhaustive search.
-        rem_fee = needed_fee - paid
-        for i in range(len(vm_coins)):
-            if coin_sum(vm_coins[:i]) >= rem_fee + txin_cost * i:
-                return select_coins(picked_vb_coins + vm_coins[:i])
+        # Now find the smallest coin that fills the gap
+        for i, c in enumerate(allocated_coins):
+            effective_value = c.amount - txin_cost
+            if effective_value >= needed_fee:
+                break
+            elif i == len(allocated_coins):
+                # There must be one, or we would not have broken from the loop above
+                raise CoinSelectionError("No coin is larger or equal to the needed fee")
 
-        # All Vm coins couldn't fill the gap? Fall back to use only Vb coins
-        if len(picked_vb_coins) < len(vb_coins):
-            for i in range(1, len(vb_coins)):
-                if coin_sum(vb_coins[:i]) > needed_fee + txin_cost * i:
-                    return select_coins(vb_coins[:i])
+        # Found! Now check if any set of smaller coins is more efficient. We can
+        # afford it as this set is likely pretty small.
+        best_candidate = [c]
+        smaller_coins = allocated_coins[:i]
+        for candidate in itertools.chain.from_iterable(
+            itertools.combinations(smaller_coins, r)
+            for r in range(2, len(smaller_coins) + 1)
+        ):
+            cand_value = sum(c.amount for c in candidate)
+            cand_effective_value = cand_value - txin_cost * len(candidate)
+            if cand_effective_value >= needed_fee:
+                if cand_effective_value < effective_value:
+                    best_candidate = candidate
+                    effective_value = cand_effective_value
+                # Edge case: if it results in the very same effective value consider
+                # it best if it reduces the transaction size.
+                elif cand_effective_value == effective_value and len(candidate) < len(
+                    best_candidate
+                ):
+                    best_candidate = candidate
+                    effective_value = cand_effective_value
+        selected_coins += best_candidate
 
-        logging.error(
-            f"Not enough reserve to pay for cancel fee ({needed_fee} sats) at feerate"
-            f" {feerate}"
-        )
-        return select_coins(vb_coins + vm_coins)
+        return select_coins(selected_coins)
 
     def finalize_cancel(self, tx, height):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
