@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 # This instanciates an OTC desk owned by 5 stakeholders and managed by 3 of them using a 2of3 multisig.
 # The managers batch payouts every evening before leaving the office, allowing for a large 6-hours Unvault timelock.
