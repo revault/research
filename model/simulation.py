@@ -100,14 +100,25 @@ class Simulation(object):
         self.delegation_successes = 0
         self.report_init = f"""\
         Watchtower config:\n\
-        vb_coins_count: {self.wt.vb_coins_count}\n\
-        vm_factor: {self.wt.vm_factor}\n\
-        Refill excess: {self.refill_excess}\n\
-        Expected active vaults: {self.num_vaults}\n\
-        Refill period: {self.refill_period}\n\
-        Unvault rate: {self.unvault_rate}\n\
-        Invalid spend rate: {self.invalid_spend_rate}\n\
-        Catastrophe rate: {self.catastrophe_rate}\n\
+            n_stk: {n_stk}\n\
+            n_man: {n_man}\n\
+            locktime: {locktime}\n\
+            hist_feerate_csv: {hist_feerate_csv}\n\
+            reserve_strat: {reserve_strat}\n\
+            fallback_est_strat: {fallback_est_strat}\n\
+            cf_coin_selec: {cf_coin_selec}\n\
+            cancel_coin_selec: {cancel_coin_selec}\n\
+            vb_coins_count: {self.wt.vb_coins_count}\n\
+            vm_factor: {self.wt.vm_factor}\n\
+        Simulation config:\n\
+            Number of vaults: {self.num_vaults}\n\
+            Refill excess: {self.refill_excess}\n\
+            Expected active vaults: {self.num_vaults}\n\
+            Refill period: {self.refill_period}\n\
+            Unvault rate: {self.unvault_rate}\n\
+            Invalid spend rate: {self.invalid_spend_rate}\n\
+            Catastrophe rate: {self.catastrophe_rate}\n\
+            Delegate rate: {self.delegate_rate}\n\
         """
         self.report_df = DataFrame(
             columns=[
@@ -195,7 +206,9 @@ class Simulation(object):
 
         divergence = []
         for vault in vaults:
-            div = vault.reserve_balance() - self.required_reserve_per_vault(block_height)
+            div = vault.reserve_balance() - self.required_reserve_per_vault(
+                block_height
+            )
             divergence.append(div)
         if self.with_divergence:
             self.divergence.append(
