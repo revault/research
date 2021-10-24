@@ -5,7 +5,7 @@
 # Stakeholders check their watchtower(s) for refill every month.
 # The spending policies in place are clear (no spendings outside business hours, up to 2 unvaults per day) and therefore the
 # rate of invalid unvault attempts is very low (around once every 3 months).
-# Stakeholders collectively delegate new vaults to managers on a weekly basis. We assume a constant pool of 20 vaults.
+# Stakeholders collectively delegate new vaults to managers on a weekly basis. We assume a starting pool of 20 vaults.
 
 NAME="OTC_DESK" \
 REPORT_FILENAME=$NAME"_report" \
