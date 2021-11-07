@@ -91,8 +91,6 @@ class Simulation(object):
         self.risk_status = []
         self.with_fb_coins_dist = with_fb_coins_dist
         self.fb_coins_dist = []
-        self.vm_values = []
-        self.vb_values = []
         self.scale_fixed = delegate_rate is None
 
         # Simulation report
@@ -741,15 +739,6 @@ class Simulation(object):
                 axes[plot_num].set_title("Fee-bump Coins Distribution")
                 axes[plot_num].set_ylabel("Satoshis", labelpad=15)
                 axes[plot_num].set_xlabel("Block", labelpad=15)
-            if self.vm_values != []:
-                df = DataFrame(self.vm_values, columns=["Block", "Vm"])
-                df.set_index("Block", inplace=True)
-                df.plot(ax=axes[plot_num], legend=True, color="red")
-            if self.vb_values != []:
-                df = DataFrame(self.vb_values, columns=["Block", "Vb"])
-                df.set_index("Block", inplace=True)
-                df.plot(ax=axes[plot_num], legend=True, color="blue")
-            axes[plot_num].legend(["$V_m$", "$V_b$"], loc="center right")
 
             plot_num += 1
 

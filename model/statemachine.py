@@ -269,7 +269,7 @@ class StateMachine:
 
         # analysis strategy over historical feerates for fee_reserve
         self.reserve_strat = reserve_strat
-        # analysis strategy over historical feerates for Vm
+        # analysis strategy over historical feerates as a fallback to estimatesmartfee
         self.fallback_est_strat = fallback_est_strat
 
         self.cf_coin_selec = cf_coin_selec
@@ -278,9 +278,8 @@ class StateMachine:
         # FIXME: make it configurable by env vars?
         self.I_2_tol = 0.3
 
-        # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
+        # avoid unnecessary search by caching fee reserve per vault, feerate
         self.frpv = (None, None)  # block, value
-        self.vm_cache = (None, None)  # block, value
         self.feerate = (None, None)  # block, value
 
         # Prepare the rolling stats
@@ -519,24 +518,6 @@ class StateMachine:
         )
         return usable_balance < required_reserve
 
-    def is_negligible(self, coin, block_height):
-        """A coin is considered negligible if its amount is less than the minimum
-        of Vm and the fee required to bump a Cancel transaction by 5 sat per vByte
-        in the worst case (when the fee rate is equal to the reserve rate).
-        Note: t1 is same as the lower bound of Vb.
-        """
-        # FIXME: it really is useless with the current dist. Vm is always lower than Vb.
-        reserve_rate = self.feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(
-            MIN_BUMP_WORST_CASE, 0
-        )
-        t2 = self.Vm(block_height)
-        minimum = min(t1, t2)
-        if coin.amount <= minimum:
-            return True
-        else:
-            return False
-
     def refill(self, amount):
         """Refill the WT by generating a new feebump coin worth 'amount', with no allocation."""
         assert isinstance(amount, int)
@@ -583,7 +564,9 @@ class StateMachine:
             ):
                 return False
 
-            return coin.is_unprocessed() or self.is_negligible(coin, block_height)
+            return coin.is_unprocessed() or self.min_acceptable_fbcoin_value(
+                coin, block_height
+            )
 
         return self.grab_coins(coin_filter)
 
@@ -1043,8 +1026,6 @@ class StateMachine:
         The UTxO pool is laid out with large coins covering up to the reserve
         and smaller coins used for a finer grained coin selection to avoid
         overpayments.
-        First try to find the number of Vb (large) coins needed to cover for
-        the most part of the fees, then fill the gap with Vm (small) coins.
         """
         txin_cost = P2WPKH_INPUT_SIZE * feerate
         allocated_coins = sorted(vault.allocated_coins())
