@@ -5,23 +5,18 @@
 # Stakeholders check their watchtower(s) for refill every month.
 # The spending policies in place are clear (no spendings outside business hours, up to 2 unvaults per day) and therefore the
 # rate of invalid unvault attempts is very low (around once every 3 months).
-# Stakeholders collectively delegate new vaults to managers on a weekly basis. We assume a starting pool of 20 vaults.
+# We generate comparative vaults for a study on keeping a constant pool of vaults at the value of 2, 4, 8 and 16.
+# We simulate in parallel on 3 CPUs at a time, with 10 repeats of the simulation per core.
 
-NAME="OTC_DESK" \
-REPORT_FILENAME=$NAME"_report" \
-PLOT_FILENAME=$NAME"_plot" \
 N_STK=5 \
 N_MAN=3 \
 LOCKTIME=36 \
-NUMBER_VAULTS=20 \
-REFILL_EXCESS=5 \
 REFILL_PERIOD=$((144 * 31)) \
 UNVAULT_RATE="0.71" \
-DELEGATE_RATE="0.71" \
 INVALID_SPEND_RATE="0.01" \
-PLOT_BALANCE=1 \
-PLOT_CUM_OP_COST=1 \
-PLOT_RISK_TIME=1 \
-PLOT_DIVERGENCE=1 \
-PLOT_OVERPAYMENTS=1 \
-python3 main.py
+LOG_LEVEL="ERROR" \
+NUM_CORES="3" \
+REPEATS_PER_CORE="10" \
+STUDY_TYPE="NUMBER_VAULTS" \
+VAL_RANGE='[2,4,8,16]' \
+python3 results.py

@@ -228,8 +228,8 @@ class StateMachine:
         locktime,
         hist_feerate_csv,
         reserve_strat,
-        estimate_strat,
-        i_version,
+        fallback_est_strat,
+        cf_coin_selec,
         cancel_coin_selec,
     ):
         self.n_stk = n_stk
@@ -247,9 +247,9 @@ class StateMachine:
         # analysis strategy over historical feerates for fee_reserve
         self.reserve_strat = reserve_strat
         # analysis strategy over historical feerates for Vm
-        self.estimate_strat = estimate_strat
+        self.fallback_est_strat = fallback_est_strat
 
-        self.I_version = i_version
+        self.cf_coin_selec = cf_coin_selec
         self.cancel_coin_selection = cancel_coin_selec
 
         # FIXME: make these configurable by env vars?
@@ -267,19 +267,19 @@ class StateMachine:
         ninety_days = 144 * 90
         logging.debug("Preparing the fee estimation data.")
 
-        if self.estimate_strat == "MA30":
+        if self.fallback_est_strat == "MA30":
             self.hist_df["MA30"] = (
                 self.hist_df["mean_feerate"]
                 .rolling(thirty_days, min_periods=144)
                 .mean()
             )
-        elif self.estimate_strat == "ME30":
+        elif self.fallback_est_strat == "ME30":
             self.hist_df["ME30"] = (
                 self.hist_df["mean_feerate"]
                 .rolling(thirty_days, min_periods=144)
                 .median()
             )
-        elif self.estimate_strat == "85Q1H":
+        elif self.fallback_est_strat == "85Q1H":
             self.hist_df["85Q1H"] = (
                 self.hist_df["mean_feerate"]
                 .rolling(6, min_periods=1)
@@ -382,13 +382,16 @@ class StateMachine:
         """Return a block chain based feerate estimate (satoshi/vbyte).
 
         The value is determined from a statistical analysis of historical feerates,
-        using one of the implemented strategies chosen with the self.estimate_strat
+        using one of the implemented strategies chosen with the self.fallback_est_strat
         parameter.
         """
         if self.feerate[0] == block_height:
             return self.feerate[1]
 
-        self.feerate = (block_height, self.hist_df[self.estimate_strat][block_height])
+        self.feerate = (
+            block_height,
+            self.hist_df[self.fallback_est_strat][block_height],
+        )
         return self.feerate[1]
 
     def next_block_feerate(self, height):
@@ -687,13 +690,13 @@ class StateMachine:
         dist_bonus = self.coins_dist_bonus(block_height)
 
         # Select coins to be consolidated
-        if self.I_version == 0:
+        if self.cf_coin_selec == 0:
             coins = self.cf_coin_selec_0(block_height)
-        elif self.I_version == 1:
+        elif self.cf_coin_selec == 1:
             coins = self.cf_coin_selec_1(block_height)
-        elif self.I_version == 2:
+        elif self.cf_coin_selec == 2:
             coins = self.cf_coin_selec_2(block_height)
-        elif self.I_version == 3:
+        elif self.cf_coin_selec == 3:
             coins = self.cf_coin_selec_3(block_height)
         else:
             raise CfError("Unknown algorithm version for coin consolidation")
