@@ -337,6 +337,15 @@ class StateMachine:
         else:
             raise ValueError("Reserve strategy not implemented")
 
+        self.hist_df["ME90"] = (
+            self.hist_df["mean_feerate"].rolling(ninety_days, min_periods=144).median()
+        )
+        self.hist_df["20Q90"] = (
+            self.hist_df["mean_feerate"]
+            .rolling(ninety_days, min_periods=144)
+            .quantile(quantile=0.2)
+        )
+
         logging.debug("Done processing the fee estimation data.")
 
     def list_vaults(self):
@@ -550,8 +559,13 @@ class StateMachine:
         remove them from P and V.
 
         This version grabs all the coins that either haven't been processed yet
-        or are negligible.
+        or are dust and we are in a low fee period. Dust is defined as not being
+        able to bump the Cancel tx by 1sat/vb at the median feerate over the last
+        90 blocks. A low fee period is detected when the next block feerate is below
+        below the 20th percentile over the last 90 blocks.
         """
+        feerate = self.next_block_feerate(block_height)
+        low_fee_period = feerate < self.hist_df["20Q90"][block_height]
 
         def coin_filter(coin):
             if coin.is_unconfirmed():
@@ -564,82 +578,17 @@ class StateMachine:
             ):
                 return False
 
-            return coin.is_unprocessed() or self.min_acceptable_fbcoin_value(
-                coin, block_height
-            )
-
-        return self.grab_coins(coin_filter)
-
-    def cf_coin_selec_2(self, block_height):
-        """Select coins to consume as inputs for the CF transaction,
-        remove them from P and V.
-
-        This version grabs all coins that are unprocessed, all
-        unallocated coins that are not in the target coin distribution
-        with a tolerance of X% (where X% == self.I_2_tol*100), and
-        if the fee-rate is low, all negligible coins
-        """
-        dist = set(self.fb_coins_dist(block_height))
-        low_feerate = self.next_block_feerate(block_height) <= 5
-
-        def coin_in_dist(coin_value, dist, tolerance):
-            for x in dist:
-                if (1 - tolerance) * x <= coin_value <= (1 + tolerance) * x:
-                    return True
-            return False
-
-        def coin_filter(coin):
-            if coin.is_unconfirmed():
-                return False
             if coin.is_unprocessed():
                 return True
-            if (
-                self.coin_pool.is_allocated(coin)
-                and self.vaults[self.coin_pool.coin_allocation(coin)].status
-                != VaultState.READY
-            ):
-                return False
-
-            if not self.coin_pool.is_allocated(coin):
-                if not coin_in_dist(coin.amount, dist, self.I_2_tol):
-                    return True
-
-            if low_feerate and coin.amount < FB_DUST_THRESH:
-                return True
-
-            return False
+            else:
+                is_dust = coin.amount < P2WPKH_INPUT_SIZE * self.hist_df["ME90"][
+                    block_height
+                ] + self.cancel_tx_fee(1, 0)
+                return is_dust and low_fee_period
 
         return self.grab_coins(coin_filter)
 
-    def cf_coin_selec_3(self, height):
-        """Select coins to consume as inputs of the CF transaction.
-
-        This version grabs all coins that were just refilled. In addition it grabs
-        some fb coins for consolidation:
-            - Allocated ones that it's not safe to keep (those that would not bump the
-              Cancel tx feerate at the reserve (max) feerate).
-        """
-
-        def coin_filter(coin):
-            if coin.is_unconfirmed():
-                return False
-            if coin.is_unprocessed():
-                return True
-            if (
-                self.coin_pool.is_allocated(coin)
-                and self.vaults[self.coin_pool.coin_allocation(coin)].status
-                != VaultState.READY
-            ):
-                return False
-
-            if not self.coin_pool.is_allocated(coin) and coin.amount < FB_DUST_THRESH:
-                return True
-
-            return False
-
-        return self.grab_coins(coin_filter)
-
-    def cf_coin_selec_4(self, height):
+    def cf_coin_selec_2(self, height):
         return self.grab_coins(lambda c: c.is_unprocessed())
 
     def min_fbcoin_value(self, height):
