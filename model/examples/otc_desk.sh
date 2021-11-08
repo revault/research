@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 # This instanciates an OTC desk owned by 5 stakeholders and managed by 3 of them using a 2of3 multisig.
 # The managers batch payouts every evening before leaving the office, allowing for a large 6-hours Unvault timelock.
@@ -19,6 +19,7 @@ REFILL_PERIOD=$((144 * 31)) \
 UNVAULT_RATE="0.71" \
 DELEGATE_RATE="0.71" \
 INVALID_SPEND_RATE="0.01" \
+CF_COIN_SELECTION=2 \
 PLOT_BALANCE=1 \
 PLOT_CUM_OP_COST=1 \
 PLOT_RISK_TIME=1 \

@@ -95,7 +95,7 @@ def main(conf, return_results=False, show_plot=False):
 
         cProfile.run("sim.run(start_block, end_block)", f"{conf['PROFILE_FILENAME']}")
         p = pstats.Stats(f"{conf['PROFILE_FILENAME']}")
-        stats = p.strip_dirs().sort_stats(SortKey.CUMULATIVE).print_stats()
+        p.strip_dirs().sort_stats(SortKey.CUMULATIVE).print_stats()
 
     else:
         sim.run(start_block, end_block)
@@ -126,7 +126,7 @@ if __name__ == "__main__":
         "HIST_CSV": os.getenv("HIST_CSV", "../block_fees/historical_fees.csv"),
         "RESERVE_STRAT": os.getenv("RESERVE_STRAT", "CUMMAX95Q90"),
         "FALLBACK_EST_STRAT": os.getenv("FALLBACK_EST_STRAT", "85Q1H"),
-        "CF_COIN_SELECTION": os.getenv("CF_COIN_SELECTION", 3),
+        "CF_COIN_SELECTION": os.getenv("CF_COIN_SELECTION", 1),
         "CANCEL_COIN_SELECTION": os.getenv("CANCEL_COIN_SELECTION", 1),
         "NUMBER_VAULTS": os.getenv("NUMBER_VAULTS", 10),
         "REFILL_EXCESS": os.getenv("REFILL_EXCESS", 2),

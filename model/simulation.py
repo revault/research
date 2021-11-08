@@ -91,8 +91,6 @@ class Simulation(object):
         self.risk_status = []
         self.with_fb_coins_dist = with_fb_coins_dist
         self.fb_coins_dist = []
-        self.vm_values = []
-        self.vb_values = []
         self.scale_fixed = delegate_rate is None
 
         # Simulation report
@@ -108,8 +106,6 @@ class Simulation(object):
             fallback_est_strat: {fallback_est_strat}\n\
             cf_coin_selec: {cf_coin_selec}\n\
             cancel_coin_selec: {cancel_coin_selec}\n\
-            vb_coins_count: {self.wt.vb_coins_count}\n\
-            vm_factor: {self.wt.vm_factor}\n\
         Simulation config:\n\
             Number of vaults: {self.num_vaults}\n\
             Refill excess: {self.refill_excess}\n\
@@ -151,7 +147,7 @@ class Simulation(object):
         cancel transaction size and the number of vaults: the absolute amount of
         BTC also accounts for the cost of including a coin in the tx vin.
         """
-        return sum(self.wt.coins_dist_reserve(block_height))
+        return sum(self.wt.fb_coins_dist(block_height))
 
     def required_reserve(self, block_height):
         """The total absolute amount of sats the WT should have in reserve."""
@@ -485,8 +481,6 @@ class Simulation(object):
             if self.with_fb_coins_dist:
                 if block % 10_000 == 0:
                     self.fb_coins_dist.append([block, self.wt.fb_coins_dist(block)])
-                self.vm_values.append([block, self.wt.Vm(block)])
-                self.vb_values.append([block, self.wt.Vb(block)])
 
             if self.wt.mempool != []:
                 for tx in self.wt.mempool:
@@ -745,15 +739,6 @@ class Simulation(object):
                 axes[plot_num].set_title("Fee-bump Coins Distribution")
                 axes[plot_num].set_ylabel("Satoshis", labelpad=15)
                 axes[plot_num].set_xlabel("Block", labelpad=15)
-            if self.vm_values != []:
-                df = DataFrame(self.vm_values, columns=["Block", "Vm"])
-                df.set_index("Block", inplace=True)
-                df.plot(ax=axes[plot_num], legend=True, color="red")
-            if self.vb_values != []:
-                df = DataFrame(self.vb_values, columns=["Block", "Vb"])
-                df.set_index("Block", inplace=True)
-                df.plot(ax=axes[plot_num], legend=True, color="blue")
-            axes[plot_num].legend(["$V_m$", "$V_b$"], loc="center right")
 
             plot_num += 1
 

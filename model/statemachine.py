@@ -5,7 +5,7 @@ TODO:
 * Make good documentation 
 """
 
-import bisect
+import itertools
 import logging
 import math
 
@@ -38,6 +38,13 @@ class AllocationError(RuntimeError):
             f"Required reserve: {required_reserve}, unallocated "
             f"balance: {unallocated_balance}"
         )
+
+
+class CoinSelectionError(RuntimeError):
+    """An error occured during coin selection"""
+
+    def __init__(self, message):
+        self.message = message
 
 
 class ProcessingState(Enum):
@@ -146,6 +153,22 @@ class FeebumpCoin:
         self.fan_block = height
 
 
+def coins_dist_rec(value, min, feerate):
+    """Create a list of coin values recursively.
+
+    Starting from {value}, the amounts are splitted into linearly smaller
+    ones, lower bounded by {min}.
+    Each coin, in addition to its value, is added the needed amount to pay for
+    its own inclusion fee as a transaction input at the provided {feerate}.
+    All coins are assumed to be P2WPKH.
+    """
+    if value <= min:
+        return [min]
+    return [math.ceil(value / 2 + P2WPKH_INPUT_SIZE * feerate)] + coins_dist_rec(
+        math.ceil(value / 2), min, feerate
+    )
+
+
 class CoinPool:
     """A set of feebump coins that the WT operates."""
 
@@ -246,20 +269,17 @@ class StateMachine:
 
         # analysis strategy over historical feerates for fee_reserve
         self.reserve_strat = reserve_strat
-        # analysis strategy over historical feerates for Vm
+        # analysis strategy over historical feerates as a fallback to estimatesmartfee
         self.fallback_est_strat = fallback_est_strat
 
         self.cf_coin_selec = cf_coin_selec
         self.cancel_coin_selection = cancel_coin_selec
 
-        # FIXME: make these configurable by env vars?
-        self.vb_coins_count = 6
-        self.vm_factor = 1.2  # multiplier M
+        # FIXME: make it configurable by env vars?
         self.I_2_tol = 0.3
 
-        # avoid unnecessary search by caching fee reserve per vault, Vm, feerate
+        # avoid unnecessary search by caching fee reserve per vault, feerate
         self.frpv = (None, None)  # block, value
-        self.vm_cache = (None, None)  # block, value
         self.feerate = (None, None)  # block, value
 
         # Prepare the rolling stats
@@ -316,6 +336,15 @@ class StateMachine:
             )
         else:
             raise ValueError("Reserve strategy not implemented")
+
+        self.hist_df["ME90"] = (
+            self.hist_df["mean_feerate"].rolling(ninety_days, min_periods=144).median()
+        )
+        self.hist_df["20Q90"] = (
+            self.hist_df["mean_feerate"]
+            .rolling(ninety_days, min_periods=144)
+            .quantile(quantile=0.2)
+        )
 
         logging.debug("Done processing the fee estimation data.")
 
@@ -424,23 +453,6 @@ class StateMachine:
         min_feerate = 0 if min_feerate == "NaN" else float(min_feerate)
         return tx.feerate() > min_feerate
 
-    def Vm(self, block_height):
-        """Starting value for the low-value feebump coins.
-
-        The low value fb coins are not part of the critical reserve but used to reduce
-        overpayments.
-        """
-        if self.vm_cache[0] == block_height:
-            return self.vm_cache[1]
-
-        # We use the block chain based estimate so it can be deterministically
-        # computed by the operator's wallet.
-        feerate = self.fallback_feerate(block_height)
-        vm = int(self.cancel_tx_fee(feerate, 0) + feerate * P2WPKH_INPUT_SIZE)
-        assert vm > 0
-        self.vm_cache = (block_height, vm)
-        return vm
-
     def min_acceptable_fbcoin_value(self, height):
         """The minimum value for a feebumping coin we create is one that allows
         to pay for its inclusion at the maximum feerate AND increase the Cancel
@@ -451,52 +463,48 @@ class StateMachine:
             feerate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(MIN_BUMP_WORST_CASE, 0)
         )
 
-    def Vb(self, block_height):
-        """Value of the large feebump coins.
-
-        The high-value fb coins are here to ensure we can bump the Cancel to the
-        reserve feerate, therefore they are lower-bounded to at least pay for their
-        own fee at the reserve feerate.
-        In addition we make sure they at least bump the feerate by 5sat/vbyte.
-        """
-        reserve = self.fee_reserve_per_vault(block_height)
-        reserve_rate = self.feerate_reserve_per_vault(block_height)
-        vb = reserve / self.vb_coins_count
-        min_vb = self.min_acceptable_fbcoin_value(block_height)
-        return int(reserve_rate * P2WPKH_INPUT_SIZE + max(vb, min_vb))
-
     def coins_dist_reserve(self, block_height):
-        """The coin amount distribution used to cover up to the worst case.
+        """The reserve part of the coin amount distribution.
 
-        These coins are needed to be able to Cancel up the reserve feerate, but
-        not usually optimal during normal operations.
+        See `fb_coins_dist` docstring for more details.
         """
-        vb = self.Vb(block_height)
-        return [vb] * self.vb_coins_count
+        reserve_feerate = self.feerate_reserve_per_vault(block_height)
+        reserve_fee = self.fee_reserve_per_vault(block_height)
+        min_large_coin = self.min_acceptable_fbcoin_value(block_height)
+        return coins_dist_rec(reserve_fee, min_large_coin, reserve_feerate)
 
-    def coins_dist_bonus(self, block_height):
-        """The coin amount distribution used to reduce overpayments.
+    def coins_dist_bonus(self, block_height, total_value):
+        """The 'bonus' part of the coins amount distribution.
 
-        These coins can't be used for feebumping in worst case scenario (at
-        reserve feerate) but still useful to reduce overpayments.
+        See `fb_coins_dist` docstring for more details.
         """
-        vm = self.Vm(block_height)
-        vb = self.Vb(block_height)
-        dist = [vm]
-        while vm * self.vm_factor < vb:
-            vm *= self.vm_factor
-            dist.append(int(vm))
-        return dist
+        curr_feerate = self.fallback_feerate(block_height)
+        min_small_coin = self.cancel_tx_fee(curr_feerate, 1)
+        return coins_dist_rec(total_value, min_small_coin, curr_feerate)
+
+    def coins_dist(self, block_height):
+        """Helper to get the non-concatenated amount distribution.
+
+        See `fb_coins_dist` for details.
+        """
+        large_coins = self.coins_dist_reserve(block_height)
+        small_coins = self.coins_dist_bonus(block_height, large_coins[-1])
+        return large_coins, small_coins
 
     def fb_coins_dist(self, block_height):
         """The coin amount distribution to target for a vault reserve.
 
-        This is the concatenation of the reserve distribution and the bonus
-        distribution.
+        The coins are separated in two classes:
+            - Large coins, those must be able to bump the Cancel transaction fee
+            at the reserve feerate.
+            - Small coins, those are "bonus" smaller coins used to reduce overpayments
+            during low-fee periods.
+
+        Note all the input data for the coin distribution function is based on the
+        block chain, allowing operators' wallets to deterministically compute it.
         """
-        return self.coins_dist_reserve(block_height) + self.coins_dist_bonus(
-            block_height
-        )
+        large_coins, small_coins = self.coins_dist(block_height)
+        return large_coins + small_coins
 
     def unallocated_balance(self):
         return sum(
@@ -518,24 +526,6 @@ class StateMachine:
             [c.amount for c in vault.fb_coins.values() if c.amount >= min_coin_value]
         )
         return usable_balance < required_reserve
-
-    def is_negligible(self, coin, block_height):
-        """A coin is considered negligible if its amount is less than the minimum
-        of Vm and the fee required to bump a Cancel transaction by 5 sat per vByte
-        in the worst case (when the fee rate is equal to the reserve rate).
-        Note: t1 is same as the lower bound of Vb.
-        """
-        # FIXME: it really is useless with the current dist. Vm is always lower than Vb.
-        reserve_rate = self.feerate_reserve_per_vault(block_height)
-        t1 = reserve_rate * P2WPKH_INPUT_SIZE + self.cancel_tx_fee(
-            MIN_BUMP_WORST_CASE, 0
-        )
-        t2 = self.Vm(block_height)
-        minimum = min(t1, t2)
-        if coin.amount <= minimum:
-            return True
-        else:
-            return False
 
     def refill(self, amount):
         """Refill the WT by generating a new feebump coin worth 'amount', with no allocation."""
@@ -569,8 +559,13 @@ class StateMachine:
         remove them from P and V.
 
         This version grabs all the coins that either haven't been processed yet
-        or are negligible.
+        or are dust and we are in a low fee period. Dust is defined as not being
+        able to bump the Cancel tx by 1sat/vb at the median feerate over the last
+        90 blocks. A low fee period is detected when the next block feerate is below
+        below the 20th percentile over the last 90 blocks.
         """
+        feerate = self.next_block_feerate(block_height)
+        low_fee_period = feerate < self.hist_df["20Q90"][block_height]
 
         def coin_filter(coin):
             if coin.is_unconfirmed():
@@ -583,82 +578,18 @@ class StateMachine:
             ):
                 return False
 
-            return coin.is_unprocessed() or self.is_negligible(coin, block_height)
-
-        return self.grab_coins(coin_filter)
-
-    def cf_coin_selec_2(self, block_height):
-        """Select coins to consume as inputs for the CF transaction,
-        remove them from P and V.
-
-        This version grabs all coins that are unprocessed, all
-        unallocated coins that are not in the target coin distribution
-        with a tolerance of X% (where X% == self.I_2_tol*100), and
-        if the fee-rate is low, all negligible coins
-        """
-        dist = set(self.fb_coins_dist(block_height))
-        low_feerate = self.next_block_feerate(block_height) <= 5
-
-        def coin_in_dist(coin_value, dist, tolerance):
-            for x in dist:
-                if (1 - tolerance) * x <= coin_value <= (1 + tolerance) * x:
-                    return True
-            return False
-
-        def coin_filter(coin):
-            if coin.is_unconfirmed():
-                return False
             if coin.is_unprocessed():
                 return True
-            if (
-                self.coin_pool.is_allocated(coin)
-                and self.vaults[self.coin_pool.coin_allocation(coin)].status
-                != VaultState.READY
-            ):
-                return False
-
-            if not self.coin_pool.is_allocated(coin):
-                if not coin_in_dist(coin.amount, dist, self.I_2_tol):
-                    return True
-
-            if low_feerate and coin.amount < FB_DUST_THRESH:
-                return True
-
-            return False
+            else:
+                is_dust = coin.amount < P2WPKH_INPUT_SIZE * self.hist_df["ME90"][
+                    block_height
+                ] + self.cancel_tx_fee(1, 0)
+                return is_dust and low_fee_period
 
         return self.grab_coins(coin_filter)
 
-    def cf_coin_selec_3(self, height):
-        """Select coins to consume as inputs of the CF transaction.
-
-        This version grabs all coins that were just refilled. In addition it grabs
-        some fb coins for consolidation:
-            - Allocated ones that it's not safe to keep (those that would not bump the
-              Cancel tx feerate at the reserve (max) feerate).
-        """
-        dust = min(FB_DUST_THRESH, self.Vm(height))
-        vm_min = self.Vm(height) * 0.9
-
-        def coin_filter(coin):
-            if coin.is_unconfirmed():
-                return False
-            if coin.is_unprocessed():
-                return True
-            if (
-                self.coin_pool.is_allocated(coin)
-                and self.vaults[self.coin_pool.coin_allocation(coin)].status
-                != VaultState.READY
-            ):
-                return False
-
-            if coin.amount < dust:
-                return True
-            if not self.coin_pool.is_allocated(coin) and coin.amount < vm_min:
-                return True
-
-            return False
-
-        return self.grab_coins(coin_filter)
+    def cf_coin_selec_2(self, height):
+        return self.grab_coins(lambda c: c.is_unprocessed())
 
     def min_fbcoin_value(self, height):
         """The absolute minimum value for a feebumping coin.
@@ -686,20 +617,14 @@ class StateMachine:
         CF transactions help maintain coin sizes that enable accurate fee-bumping.
         """
         # Set target values for our coin creation amounts
-        dist_reserve = self.coins_dist_reserve(block_height)
-        dist_bonus = self.coins_dist_bonus(block_height)
+        dist_reserve, dist_bonus = self.coins_dist(block_height)
 
         # Select coins to be consolidated
-        if self.cf_coin_selec == 0:
-            coins = self.cf_coin_selec_0(block_height)
-        elif self.cf_coin_selec == 1:
-            coins = self.cf_coin_selec_1(block_height)
-        elif self.cf_coin_selec == 2:
-            coins = self.cf_coin_selec_2(block_height)
-        elif self.cf_coin_selec == 3:
-            coins = self.cf_coin_selec_3(block_height)
-        else:
+        try:
+            f = getattr(self, f"cf_coin_selec_{self.cf_coin_selec}")
+        except AttributeError:
             raise CfError("Unknown algorithm version for coin consolidation")
+        coins = f(block_height)
 
         # FIXME: we shouldn't use the next block feerate, rather something more economical.
         feerate = self.next_block_feerate(block_height)
@@ -861,8 +786,7 @@ class StateMachine:
         """WT allocates coins to a (new/existing) vault if there is enough
         available coins to meet the requirement.
         """
-        dist_req = self.coins_dist_reserve(block_height)
-        dist_bonus = self.coins_dist_bonus(block_height)
+        dist_req, dist_bonus = self.coins_dist(block_height)
         min_coin_value = self.min_fbcoin_value(block_height)
         # If the vault exists and is under reserve, don't remove it immediately
         # to make sure we won't fail after modifying the internal state.
@@ -1051,31 +975,14 @@ class StateMachine:
         The UTxO pool is laid out with large coins covering up to the reserve
         and smaller coins used for a finer grained coin selection to avoid
         overpayments.
-        First try to find the number of Vb (large) coins needed to cover for
-        the most part of the fees, then fill the gap with Vm (small) coins.
         """
         txin_cost = P2WPKH_INPUT_SIZE * feerate
         allocated_coins = sorted(vault.allocated_coins())
-        # All vb coins are always larger than vm coins (or at least we assume so)
-        vm_coins, vb_coins = (
-            allocated_coins[: -self.vb_coins_count],
-            allocated_coins[-self.vb_coins_count :],
+        selected_coins = []
+        logging.debug(
+            f"        Coin selection needed fee: {needed_fee}, "
+            f"allocated coins: {[c.amount for c in allocated_coins]}"
         )
-        # We often end up with more Vb coins which we would consider to be Vm coins
-        # above. Try to fix this based on their value.
-        while True:
-            # Sanity hard stop
-            if len(vm_coins) <= 6:
-                break
-            coin = vm_coins.pop(-1)
-            if coin.amount >= vb_coins[-1].amount * 0.80:
-                bisect.insort(vb_coins, coin)
-            else:
-                vm_coins.append(coin)
-                break
-
-        def coin_sum(coins):
-            return sum(c.amount for c in coins)
 
         def select_coins(coins):
             for coin in coins:
@@ -1083,45 +990,60 @@ class StateMachine:
                 self.remove_coin(coin)
             return coins
 
-        # First check if the needed amount is very low, in which case we don't
-        # even need a Vb coin.
-        if vb_coins[0].amount > needed_fee + txin_cost:
-            # TODO: the number of vm coins is always low, we could do an exhaustive search.
-            for i in range(1, len(vm_coins)):
-                if coin_sum(vm_coins[:i]) >= needed_fee + txin_cost * i:
-                    return select_coins(vm_coins[:i])
-            return select_coins([vb_coins[0]])
+        # Shortcut: if the smallest coin value is more than the needed fee, just return it.
+        smallest_coin_effective_value = allocated_coins[0].amount - txin_cost
+        if needed_fee <= smallest_coin_effective_value:
+            return select_coins([allocated_coins[0]])
 
-        # Then gather enough vb coins
-        picked_vb_coins = []
-        paid = 0
-        for i in range(1, len(vb_coins)):
-            coin = vb_coins[-i]
-            if needed_fee - paid < coin.amount - txin_cost:
+        # While the needed fee is largest than our largest coin, it is always our
+        # most optimal pick (as the sum of the rest of the coin value equals its value).
+        while True:
+            largest_coin_effective_value = allocated_coins[-1].amount - txin_cost
+            if needed_fee < largest_coin_effective_value:
                 break
-            picked_vb_coins.append(coin)
-            paid += coin.amount - txin_cost
+            if len(allocated_coins) == 0 or largest_coin_effective_value <= 0:
+                logging.error(
+                    "     Not enough coin allocated to select for Cancel."
+                    f" {needed_fee}sats still needed after selecting "
+                    f"{selected_coins}."
+                )
+                return select_coins(selected_coins)
+            selected_coins.append(allocated_coins.pop(-1))
+            needed_fee -= largest_coin_effective_value
 
-        # And finally fill the gap with small Vm coins. Note we go through the
-        # list in reverse order as the Vm coins amount is increasing.
-        # TODO: figure out why we have less overpayments by going in increasing order
-        # TODO: the number of vm coins is always low, we could do an exhaustive search.
-        rem_fee = needed_fee - paid
-        for i in range(len(vm_coins)):
-            if coin_sum(vm_coins[:i]) >= rem_fee + txin_cost * i:
-                return select_coins(picked_vb_coins + vm_coins[:i])
+        # Now find the smallest coin that fills the gap
+        for i, c in enumerate(allocated_coins):
+            effective_value = c.amount - txin_cost
+            if effective_value >= needed_fee:
+                break
+            elif i == len(allocated_coins):
+                # There must be one, or we would not have broken from the loop above
+                raise CoinSelectionError("No coin is larger or equal to the needed fee")
 
-        # All Vm coins couldn't fill the gap? Fall back to use only Vb coins
-        if len(picked_vb_coins) < len(vb_coins):
-            for i in range(1, len(vb_coins)):
-                if coin_sum(vb_coins[:i]) > needed_fee + txin_cost * i:
-                    return select_coins(vb_coins[:i])
+        # Found! Now check if any set of smaller coins is more efficient. We can
+        # afford it as this set is likely pretty small.
+        best_candidate = [c]
+        smaller_coins = allocated_coins[:i]
+        for candidate in itertools.chain.from_iterable(
+            itertools.combinations(smaller_coins, r)
+            for r in range(2, len(smaller_coins) + 1)
+        ):
+            cand_value = sum(c.amount for c in candidate)
+            cand_effective_value = cand_value - txin_cost * len(candidate)
+            if cand_effective_value >= needed_fee:
+                if cand_effective_value < effective_value:
+                    best_candidate = candidate
+                    effective_value = cand_effective_value
+                # Edge case: if it results in the very same effective value consider
+                # it best if it reduces the transaction size.
+                elif cand_effective_value == effective_value and len(candidate) < len(
+                    best_candidate
+                ):
+                    best_candidate = candidate
+                    effective_value = cand_effective_value
+        selected_coins += best_candidate
 
-        logging.error(
-            f"Not enough reserve to pay for cancel fee ({needed_fee} sats) at feerate"
-            f" {feerate}"
-        )
-        return select_coins(vb_coins + vm_coins)
+        return select_coins(selected_coins)
 
     def finalize_cancel(self, tx, height):
         """Once the cancel is confirmed, any remaining fbcoins allocated to vault_id
